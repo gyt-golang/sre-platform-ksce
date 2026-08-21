@@ -222,8 +222,78 @@ spec:
           configMap: {name: grafana-datasources}
         - name: dashboard-providers
           configMap: {name: grafana-dashboard-providers}
+        # projected 合并 SLO 大盘与成本大盘两个 ConfigMap 到同一目录
         - name: dashboards
-          configMap: {name: grafana-dashboard-slo}
+          projected:
+            sources:
+              - configMap: {name: grafana-dashboard-slo}
+              - configMap: {name: grafana-dashboard-cost}
+---
+# 成本可视化大盘（FinOps）：KS3 存储量、KEC 实例成本、Loki 日志量、总成本。
+# 指标由 deploy/scripts/cost-metrics.py 生成（Prometheus textfile 采集或 pushgateway）。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-cost
+  namespace: observability
+data:
+  sre-cost.json: |
+    {
+      "title": "SRE 平台成本大盘 (FinOps)",
+      "uid": "sre-cost",
+      "schemaVersion": 39,
+      "time": {"from": "now-7d", "to": "now"},
+      "tags": ["sre", "finops", "cost"],
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "月总成本估算（元）",
+          "datasource": {"type": "prometheus"},
+          "targets": [{"expr": "sre_cost_total_monthly_yuan", "refId": "A"}],
+          "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0},
+          "fieldConfig": {"defaults": {"unit": "currencyCNY"}}
+        },
+        {
+          "id": 2, "type": "stat", "title": "KEC 月成本（元）",
+          "datasource": {"type": "prometheus"},
+          "targets": [{"expr": "sre_cost_kec_monthly_total_yuan", "refId": "A"}],
+          "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0},
+          "fieldConfig": {"defaults": {"unit": "currencyCNY"}}
+        },
+        {
+          "id": 3, "type": "stat", "title": "KS3 存储量（GB）",
+          "datasource": {"type": "prometheus"},
+          "targets": [{"expr": "sre_cost_ks3_storage_bytes{bucket!=\"\"} / 1024 / 1024 / 1024", "refId": "A"}],
+          "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0},
+          "fieldConfig": {"defaults": {"unit": "decgbytes"}}
+        },
+        {
+          "id": 4, "type": "stat", "title": "Loki 日志摄入（lines/s）",
+          "datasource": {"type": "prometheus"},
+          "targets": [{"expr": "sre_cost_loki_ingest_lines_per_sec", "refId": "A"}],
+          "gridPos": {"h": 6, "w": 6, "x": 18, "y": 0}
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "KS3 存储增长趋势（按 prefix）",
+          "datasource": {"type": "prometheus"},
+          "targets": [{"expr": "sre_cost_ks3_storage_bytes{prefix!=\"\"}", "legendFormat": "{{prefix}}", "refId": "A"}],
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+          "fieldConfig": {"defaults": {"unit": "bytes"}}
+        },
+        {
+          "id": 6, "type": "timeseries", "title": "KEC 成本构成（master vs node）",
+          "datasource": {"type": "prometheus"},
+          "targets": [{"expr": "sre_cost_kec_monthly_yuan", "legendFormat": "{{role}}", "refId": "A"}],
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+          "fieldConfig": {"defaults": {"unit": "currencyCNY"}}
+        },
+        {
+          "id": 7, "type": "timeseries", "title": "Loki 日志摄入趋势",
+          "datasource": {"type": "prometheus"},
+          "targets": [{"expr": "sre_cost_loki_ingest_lines_per_sec", "refId": "A"}],
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 14}
+        }
+      ]
+    }
 ---
 apiVersion: v1
 kind: Service

@@ -7,3 +7,8 @@ deploy/scripts/probe*.py
 # 本地生成物
 deploy/scripts/dash.json
 __pycache__/
+
+# 个人求职文档生成脚本（生成面经/项目报告 .docx，非项目源码，仅本地自用）
+deploy/scripts/gen-report.py
+deploy/scripts/gen-interview.py
+deploy/scripts/gen-interview-deep.py

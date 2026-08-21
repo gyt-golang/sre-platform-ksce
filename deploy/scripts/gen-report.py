@@ -1,503 +1,270 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""生成《基于金山云平台的 SRE 可靠性工程平台》项目报告 Word 版。"""
+"""生成《基于金山云平台的 SRE 可靠性工程平台》项目报告 Word 版（v3）。
+
+结构：项目背景 / 技术栈 / 项目痛点 / 核心职责 / 最终成果。
+用法：python deploy/scripts/gen-report.py
+依赖：python-docx（pip install python-docx）
+"""
 from docx import Document
-from docx.shared import Pt, RGBColor, Inches
+from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
 doc = Document()
 
-# 全局字体（中文宋体，西文 Calibri）
+# 全局字体（中文微软雅黑，西文 Calibri）
 style = doc.styles['Normal']
 style.font.name = 'Calibri'
 style.font.size = Pt(10.5)
-style.element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
+style.element.rPr.rFonts.set(qn('w:eastAsia'), '微软雅黑')
+
 
 def set_cn(run, name='微软雅黑'):
     run.font.name = 'Calibri'
     run._element.rPr.rFonts.set(qn('w:eastAsia'), name)
 
+
+def TITLE(text):
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = p.add_run(text); set_cn(r); r.font.size = Pt(22); r.bold = True
+    r.font.color.rgb = RGBColor(0x1F, 0x4E, 0x79)
+
+
+def SUB(text):
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = p.add_run(text); set_cn(r); r.font.size = Pt(11); r.italic = True
+    r.font.color.rgb = RGBColor(0x59, 0x59, 0x59)
+
+
 def H1(text):
     p = doc.add_heading(level=1)
-    r = p.add_run(text); set_cn(r); r.font.size = Pt(16); r.font.color.rgb = RGBColor(0x1F,0x4E,0x79)
-    return p
+    r = p.add_run(text); set_cn(r); r.font.size = Pt(16); r.font.color.rgb = RGBColor(0x1F, 0x4E, 0x79)
+
 
 def H2(text):
     p = doc.add_heading(level=2)
-    r = p.add_run(text); set_cn(r); r.font.size = Pt(13); r.font.color.rgb = RGBColor(0x2E,0x74,0xB5)
-    return p
+    r = p.add_run(text); set_cn(r); r.font.size = Pt(13); r.font.color.rgb = RGBColor(0x2E, 0x74, 0xB5)
+
 
 def H3(text):
     p = doc.add_heading(level=3)
-    r = p.add_run(text); set_cn(r); r.font.size = Pt(11.5); r.font.color.rgb = RGBColor(0x2E,0x74,0xB5)
-    return p
+    r = p.add_run(text); set_cn(r); r.font.size = Pt(11.5); r.font.color.rgb = RGBColor(0x2E, 0x74, 0xB5)
 
-def P(text, bold=False, italic=False):
+
+def P(text, bold=False):
     p = doc.add_paragraph()
-    r = p.add_run(text); set_cn(r); r.font.size = Pt(10.5); r.bold = bold; r.italic = italic
+    r = p.add_run(text); set_cn(r); r.font.size = Pt(10.5); r.bold = bold
     return p
 
-def BULLET(text):
+
+def BULLET(text, bold_head=None):
+    """列表项；bold_head 为前导加粗短语。"""
     p = doc.add_paragraph(style='List Bullet')
-    r = p.add_run(text); set_cn(r); r.font.size = Pt(10.5)
-    return p
+    if bold_head:
+        r = p.add_run(bold_head); set_cn(r); r.bold = True; r.font.size = Pt(10.5)
+        r2 = p.add_run(text); set_cn(r2); r2.font.size = Pt(10.5)
+    else:
+        r = p.add_run(text); set_cn(r); r.font.size = Pt(10.5)
+
+
+def A(text):
+    """强调说明段（斜体灰）。"""
+    p = doc.add_paragraph()
+    r = p.add_run(text); set_cn(r); r.font.size = Pt(10); r.italic = True
+    r.font.color.rgb = RGBColor(0x59, 0x59, 0x59)
+
 
 def CODE(text):
+    """等宽代码/架构图块。"""
     p = doc.add_paragraph()
-    p.paragraph_format.left_indent = Inches(0.3)
-    r = p.add_run(text); r.font.name = 'Consolas'; r.font.size = Pt(9); r.font.color.rgb = RGBColor(0x40,0x40,0x40)
-    return p
+    pf = p.paragraph_format
+    pf.left_indent = Pt(6); pf.space_before = Pt(4); pf.space_after = Pt(4)
+    r = p.add_run(text); r.font.name = 'Consolas'
+    r._element.rPr.rFonts.set(qn('w:eastAsia'), 'Consolas')
+    r.font.size = Pt(9.5); r.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+    # 浅灰底纹
+    shd = OxmlElement('w:shd'); shd.set(qn('w:fill'), 'F2F2F2')
+    p.paragraph_format.element.get_or_add_pPr().append(shd)
 
-def TABLE(headers, rows, widths=None):
+
+def table(headers, rows):
     t = doc.add_table(rows=1, cols=len(headers))
     t.style = 'Light Grid Accent 1'
-    t.alignment = WD_TABLE_ALIGNMENT.CENTER
-    hdr = t.rows[0].cells
-    for i,h in enumerate(headers):
-        hdr[i].paragraphs[0].clear()
-        r = hdr[i].paragraphs[0].add_run(h); set_cn(r); r.bold = True; r.font.size = Pt(10)
+    t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for i, h in enumerate(headers):
+        c = t.rows[0].cells[i]
+        c.paragraphs[0].clear()
+        r = c.paragraphs[0].add_run(str(h)); set_cn(r); r.bold = True; r.font.size = Pt(9.5)
     for row in rows:
         cells = t.add_row().cells
-        for i,v in enumerate(row):
+        for i, v in enumerate(row):
             cells[i].paragraphs[0].clear()
             r = cells[i].paragraphs[0].add_run(str(v)); set_cn(r); r.font.size = Pt(9.5)
     return t
 
+
 # ============ 封面 ============
-title = doc.add_paragraph()
-title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-r = title.add_run('基于金山云平台的\nSRE 可靠性工程平台')
-set_cn(r, '微软雅黑'); r.font.size = Pt(26); r.bold = True; r.font.color.rgb = RGBColor(0x1F,0x4E,0x79)
-for _ in range(2): doc.add_paragraph()
-sub = doc.add_paragraph(); sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-r = sub.add_run('—— 项目技术报告 ——'); set_cn(r); r.font.size = Pt(14); r.font.color.rgb = RGBColor(0x59,0x59,0x59)
+TITLE('基于金山云平台的 SRE 可靠性工程平台')
+SUB('项目技术报告 · 秋招 SRE 岗位作品')
+SUB('金山云 KEC 真实多节点 K8s 集群端到端落地 · 2026-08')
 doc.add_paragraph()
-info = doc.add_paragraph(); info.alignment = WD_ALIGN_PARAGRAPH.CENTER
-r = info.add_run('作者：甘玉涛  |  方向：SRE / 云原生可靠性工程  |  日期：2026 年 8 月')
-set_cn(r); r.font.size = Pt(11)
-doc.add_page_break()
 
-# ============ 一、项目核心 ============
-H1('一、项目核心：做了什么')
-P('一句话概括：在金山云 KEC 真实多节点 K8s 集群上，用 SRE 方法论端到端构建了一个微服务可靠性工程平台，'
-  '回答"SRE 到底在做什么"——不是"把服务部署起来"，而是"用软件工程方法让系统天然更稳定、可量化、可自治"。')
-P('具体做了四件事（对应 SRE 的四个核心问题）：', bold=True)
-BULLET('系统有多稳？—— 定义 SLO 与错误预算，把"稳定性"从主观感觉变成可量化的数字。')
-BULLET('不稳了怎么第一时间知道？—— 搭建可观测性三支柱（Metrics / Logs / Traces）+ 多窗口多燃烧率告警。')
-BULLET('故障来了系统能不能自己扛？—— 探针自愈 + HPA 弹性扩缩 + 熔断降级，减少人工介入。')
-BULLET('怎么主动验证它真的扛得住？—— 用 Chaos Mesh 混沌工程主动注入故障，验证可靠性假设。')
-P('并接入金山云 KECR（镜像仓库）与 KS3（对象存储）两个云产品，体现"基于金山云平台"的云原生落地，'
-  '非本地 demo 玩具。项目已端到端跑通，含真实运行数据。', italic=True)
+# ============ 一、项目背景 ============
+H1('一、项目背景')
+P('传统运维关注"怎么把服务部署起来、出了问题怎么修"，SRE 关注"如何用软件工程方法让系统天然更稳定、可量化、可自治"。'
+  '本项目用 Go 编写一个电商订单微服务 ordersvc，在金山云 KEC 真实 5 节点 Kubernetes 集群上，端到端落地 SRE 可靠性工程方法论，'
+  '回答四个核心问题：')
+BULLET('系统有多稳？——SLO 定义与错误预算量化可靠性。', '① ')
+BULLET('不稳了怎么第一时间知道？——可观测性三支柱 + 多窗口燃烧率告警 + Alertmanager 触达 oncall。', '② ')
+BULLET('故障来了系统能不能自己扛？——探针自愈 + HPA 弹性扩缩容。', '③ ')
+BULLET('怎么持续改进、不让稳定性退化？——SLO 周期回顾 + Toil 量化 + Postmortem 闭环。', '④ ')
+P('它不是"把服务部署起来"，而是用软件工程方法让系统可量化、可自治、可运营。项目已开源：'
+  'github.com/gyt-golang/sre-platform-ksce。')
 
-# ============ 二、项目背景 ============
-H1('二、项目背景与目标')
-P('传统运维的稳定性是"感觉"——"好像挺稳"、"最近没出事"。SRE 的革命性在于：用软件工程方法把稳定性量化、'
-  '自动化、可验证。本项目以一个 Go 写的电商订单微服务 ordersvc 为载体，在其上完整落地 SRE 方法论，'
-  '覆盖大厂 SRE 岗位（字节 / 滴滴 / 阿里 / 腾讯 / 京东）JD 中的全部核心能力点。')
-P('目标：', bold=True)
-BULLET('落地完整的 SRE 可靠性工程闭环：SLO → 可观测性 → 告警 → 自愈 → 混沌验证。')
-BULLET('在金山云真实多节点集群运行，接入云产品，体现公有云工程能力。')
-BULLET('产出可复现的声明式基础设施（全 YAML + 一键部署脚本）。')
+# ============ 二、技术栈 ============
+H1('二、技术栈')
+P('围绕 SRE 可靠性工程的五大领域选型，全部在金山云真实云环境落地：')
+table(
+    ['领域', '技术选型', '用途'],
+    [
+        ['业务服务', 'Go 1.22 + chi router + prometheus client', 'ordersvc 订单微服务，数据面/控制面端口分离，OTel 链路埋点，专用 metrics registry'],
+        ['计算平台', '金山云 KEC（5 节点：3 master + 2 node）', 'K8s v1.31.14 + Calico CNI + containerd 2.2.6 + Rocky 9.8，kubeadm 高可用集群'],
+        ['SLO 引擎', 'Prometheus recording rules + 声明式 SLO spec', 'slo-spec.yaml 单一事实源，派生 5 窗口×5 指标 recording rules + 多窗口燃烧率告警'],
+        ['Metrics', 'Prometheus + Grafana', 'Pod 注解自动发现，16 面板 SLO 大盘（错误预算/燃烧率/4 黄金信号）'],
+        ['Logs', 'Loki + Promtail + 金山云 KS3', 'Promtail DaemonSet 采集，Loki chunks + tsdb 索引落 KS3 对象存储，存算分离'],
+        ['Traces', 'Jaeger + OpenTelemetry SDK', 'ordersvc 全链路 trace，故障定位到具体 span'],
+        ['告警链路', 'Alertmanager + 飞书 webhook', '分组去重 + inhibit 抑制 + 通知触达，告警自带 runbook/dashboard enrichment'],
+        ['混沌工程', 'Chaos Mesh 2.7', 'PodKill / NetworkDelay / CPUStress 主动验证系统韧性'],
+        ['自愈', 'K8s HPA + liveness/readiness 探针', '流量激增自动扩容，进程挂掉自动重启'],
+        ['镜像分发', '金山云 KECR + imagePullSecrets', 'ordersvc 自研镜像推私有仓库，集群经 Secret 拉取'],
+    ]
+)
 
-# ============ 三、金山云基础设施 ============
-H1('三、金山云基础设施')
-P('本项目运行在金山云 KEC 真实多节点集群，而非本地 kind 单机：')
-TABLE(['组件', '规格 / 说明'],
-[
-  ['KEC 主机', '5 台：3 master + 2 node（master01/02/03 + node01/02）'],
-  ['操作系统 / 内核', 'Rocky Linux 9.8 / K8s v1.31.14 / containerd 2.2.6'],
-  ['CNI 网络', 'Calico（Pod CIDR 172.16.0.0/16，Service CIDR 192.168.0.0/16）'],
-  ['StorageClass', 'local-path（default），供 Loki 索引等本地持久化'],
-  ['metrics-server', '已就绪，HPA 容量弹性可用'],
-  ['VPC + EIP + 安全组', '5 节点内网 10.0.0.x 互通；公网经 EIP，安全组放行 NodePort 30088/30090/30300/30686'],
-  ['金山云 KECR', 'hub.kce.ksyun.com 私有镜像仓库，ordersvc 镜像 push 至此，集群经 imagePullSecrets 拉取'],
-  ['金山云 KS3', 'S3 兼容对象存储，Loki chunks 落 KS3，实现日志存算分离与长期归档'],
-  ['kubeconfig 公网化', 'admin.conf server 由内网 VIP 10.0.0.236:16443 改为公网 10.0.0.182:16443，本地直连'],
-])
-P('公网访问地址（金山云 KEC EIP + 安全组放行 NodePort）：', bold=True)
-CODE('ordersvc API :  http://10.0.0.182:30088/healthz\n'
-     'Prometheus   :  http://10.0.0.182:30090    (/rules /alerts)\n'
-     'Grafana      :  http://10.0.0.182:30300    (admin/admin)\n'
-     'Jaeger UI    :  http://10.0.0.182:30686')
+# ============ 三、项目痛点 ============
+H1('三、项目痛点')
+P('传统运维体系在云原生场景下的典型痛点，本项目逐一用 SRE 方法论解决：')
+table(
+    ['痛点', '传统运维做法', '本项目 SRE 解法'],
+    [
+        ['可靠性靠感觉', '"我觉得挺稳"，无量化指标', 'SLO（99.9% 可用性 / P99<500ms）+ 错误预算量化，所有决策基于数据'],
+        ['告警疲劳', '错误率>5% 等拍脑袋阈值，告警泛滥', '多窗口多燃烧率告警（14.4/6/1 三级），只在预算高速燃烧时触发，Alertmanager 分组抑制'],
+        ['告警不触达', '规则 firing 无人知晓', 'Alertmanager → 飞书 webhook，分组去重 + inhibit 抑制，告警带 runbook_url 一键排障'],
+        ['日志存不起', '本地盘存日志，容量受限、Pod 重启即丢', 'Loki 接金山云 KS3 对象存储，chunks + 索引落 KS3，存算分离、近无限容量、便宜归档'],
+        ['故障靠人救', '手动 kubectl 排查、手动扩容', 'HPA 自动扩缩容 + 探针自愈 + Toil 量化驱动自动化，可回收成本数据驱动排期'],
+        ['复盘走过场', 'Postmortem 写完即束之高阁', 'schema 校验必填章节 + 行动项强制 ≥1 DONE 闭环，禁止全 TODO 堆积'],
+        ['SLO 定完即忘', '定义一次后再不回顾', 'slo-spec 单一事实源 + slo-report.py 周期生成达成报告，主动回顾调整'],
+        ['本地 demo 玩具', 'kind 单机，无法体现真实网络/多节点', '金山云 KEC 5 节点真实集群 + KECR/KS3 云产品，真实云环境落地'],
+    ]
+)
 
-# ============ 四、系统架构 ============
-H1('四、系统架构')
-CODE('┌────── 金山云 KEC 公网入口（EIP + 安全组放行 NodePort）──────┐\n'
-     '│  10.0.0.182:30088 / 30090 / 30300 / 30686               │\n'
-     '└──┬──────────┬────────┬──────┬──────────────────────────────┘\n'
-     '   │          │        │      │\n'
-     '┌── 金山云 KEC 5 节点 K8s v1.31 / Calico / containerd ──────────┐\n'
-     '│  ns: sre-demo                    ns: observability           │\n'
-     '│  ┌──────────────────┐            ┌────────────────────┐     │\n'
-     '│  │ ordersvc (Go) x3 │──/metrics─▶│ Prometheus         │     │\n'
-     '│  │ +OTLP +health    │            │ (SLO 规则+告警)     │     │\n'
-     '│  │ +HPA +Probe      │            └────────┬───────────┘     │\n'
-     '│  │ imagePullSecrets │                     │                 │\n'
-     '│  │  →金山云 KECR     │               ┌─────▼──────────┐      │\n'
-     '│  └───┬────────┬─────┘               │ Grafana(SLO大盘)│      │\n'
-     '│  OTLP│    logs│                     └─────┬──────────┘      │\n'
-     '│      ▼       ▼                     ┌─────▼──────────┐      │\n'
-     '│  ┌───────┐ ┌────────┐              │ Loki◀─Promtail  │─chunks─▶KS3\n'
-     '│  │OTel C.│ │Promtail│              └────────────────┘      │\n'
-     '│  └───┬───┘ └────────┘                                      │\n'
-     '│      ▼                                                    │\n'
-     '│  ┌───────┐               ┌──────────────────┐             │\n'
-     '│  │Jaeger │               │ Chaos Mesh       │             │\n'
-     '│  └───────┘               │ PodKill/Net/CPU  │─▶ 故障注入   │\n'
-     '│                          └──────────────────┘             │\n'
-     '└────────────────────────────────────────────────────────────┘')
+# ============ 四、核心职责 ============
+H1('四、核心职责')
 
-# ============ 五、技术栈 ============
-H1('五、技术栈与对应 SRE 能力')
-TABLE(['模块', '技术选型', '体现的 SRE 能力（命中 JD）'],
-[
-  ['云基础设施', '金山云 KEC + VPC + EIP + 安全组', '公有云资源编排、网络与安全组规划'],
-  ['镜像仓库', '金山云 KECR + imagePullSecrets', '私有镜像仓库治理、凭证管理'],
-  ['对象存储', '金山云 KS3（Loki chunks 后端）', '存算分离、日志长期归档、云原生存储'],
-  ['业务服务', 'Go + 多阶段 Dockerfile + 非 root', 'Go 语言、容器化、镜像安全基线'],
-  ['编排', 'K8s Deployment / HPA / Probe', '滚动发布零宕机、探针自愈、容量弹性'],
-  ['Metrics', 'Prometheus + 自定义指标 + Recording Rules', '指标体系设计、SLI 计算、规则预聚合'],
-  ['Logs', 'Loki + Promtail(DaemonSet) + KS3', '日志聚合、结构化日志、存储分离'],
-  ['Traces', 'OpenTelemetry + OTel Collector + Jaeger', '分布式链路追踪、采样治理'],
-  ['可视化', 'Grafana + provisioning（16 面板 SLO 大盘）', 'SLO 大盘、错误预算可视化'],
-  ['SLO 引擎', '5 窗口多燃烧率告警（Google SRE 法）', 'SLO/错误预算/燃烧率告警（核心考点）'],
-  ['混沌工程', 'Chaos Mesh（Pod/Network/StressChaos）', '故障演练、可靠性主动验证'],
-  ['故障自愈', 'liveness/readiness/startup probe + HPA + /admin/fault', '自愈、流量摘除、降级'],
-  ['IaC', '全声明式 YAML + 一键 bootstrap 脚本', '基础设施即代码、可复现'],
-])
+H2('4.1 SLO 定义与错误预算')
+P('用 slo-spec.yaml 作为单一事实源声明 SLO（声明式 spec），recording 与 alert rules 由 spec 派生，'
+  '避免手写 26 条规则易错。改 SLO 目标只改 spec，规则随之对齐。')
+BULLET('可用性 SLO 99.9%：5xx 视为错误，允许错误预算 0.1%/月（≈43.2 分钟）。', '• ')
+BULLET('延迟 SLO P99<500ms：99% 请求延迟达标，允许 1% 违规。', '• ')
+BULLET('5 窗口 recording rules：error_ratio / burn_rate 各 5m/30m/1h/6h/1d，覆盖短中长期趋势。', '• ')
+BULLET('多窗口多燃烧率告警：Page（5m&1h, >14.4，1h 耗 ≥2% 月预算）/ Ticket（30m&6h, >6）/ Budget（1d, >1）。', '• ')
+A('阈值有理论依据：14.4 = 1 小时消耗 2% 月预算，从 SLO 推导而非拍脑袋。多窗口天然分级，避免告警疲劳。')
 
-# ============ 六、SLO 设计 ============
-H1('六、SLO 设计（项目核心）')
-H2('6.1 SLI 与目标')
-TABLE(['SLI', '定义', '目标（30 天窗口）', '错误预算'],
-[
-  ['可用性', '非 5xx 请求占比', '≥ 99.9%', '0.1% ≈ 43 分钟/月'],
-  ['延迟', 'P99 请求延迟', '< 500ms', '—'],
-])
-H2('6.2 错误预算')
-P('100% − 99.9% = 0.1%，这 0.1% 是"允许出错的部分"，即错误预算。30 天 ≈ 43200 分钟，0.1% ≈ 43 分钟/月。'
-  '预算是用来"花"的——允许小故障消耗，而非追求 100% 完美（成本过高）。预算耗尽则本月不及格，需冻结变更、专心优化。')
-H2('6.3 燃烧率（Burn Rate）')
-P('燃烧率 = 实际错误率 ÷ 允许错误率(0.001)。=1 表示按预算匀速消耗；=14.4 表示 1 小时耗尽 2% 月预算（需立即介入）。')
-H2('6.4 多窗口多燃烧率告警（Google SRE《SRE 工作手册》第 5 章）')
-P('短窗口负责"快速发现"，长窗口负责"防抖降噪"，两者同时超阈值才告警——避免单窗口抖动误报。三档告警：')
-TABLE(['告警', '短窗口 & 长窗口', '阈值', '含义', '动作'],
-[
-  ['Page', '5m & 1h', '> 14.4', '1h 消耗 ≥2% 月预算', '立即介入'],
-  ['Ticket', '30m & 6h', '> 6', '6h 消耗 ~5% 月预算', '建工单'],
-  ['Budget', '1d', '> 1', '按此速率将耗尽预算', '排期优化'],
-])
-P('Prometheus 实现：5 窗口（5m/30m/1h/6h/1d）× 5 类指标 = 21 条 Recording Rules + 5 条 Alert Rules，共 26 条规则。', italic=True)
+H2('4.2 可观测性三支柱')
+H3('Metrics —— Prometheus + Grafana')
+P('通过 kubernetes_sd_configs + Pod 注解自动发现 ordersvc:9090/metrics，加载 SLO recording/alert rules。'
+  'Grafana 16 面板 SLO 大盘覆盖错误预算、燃烧率、USE/RED 四黄金信号。')
+H3('Logs —— Loki + Promtail + 金山云 KS3（存算分离）')
+P('Promtail 以 DaemonSet 采集每个节点容器日志，解析 ordersvc 结构化 JSON 日志打 level 标签。'
+  'Loki chunks + tsdb 索引落金山云 KS3 对象存储（S3 兼容 API），实现存算分离：')
+BULLET('容量近乎无限、按需扩容，不受单节点磁盘限制。', '• ')
+BULLET('Pod 重启/节点故障日志不丢，对象存储独立于集群。', '• ')
+BULLET('Loki 无状态化可水平扩展，本地仅存 wal/cache。', '• ')
+BULLET('对象存储便宜，适合海量日志长期归档（保留 168h）。', '• ')
+A('踩坑：Loki 3.x S3 字段名是 bucketnames/s3forcepathstyle（非老式 bucket_name）；'
+  'Promtail 需配 ServiceAccount RBAC + __path__ relabel，否则静默不采集日志。实测 KS3 出现 100+ chunks 对象。')
 
-# ============ 七、可观测性 ============
-H1('七、可观测性三支柱')
-H2('7.1 Metrics（指标）—— Prometheus')
-BULLET('ordersvc 自定义 6 类指标：请求计数、请求耗时直方图、订单创建/失败、在途订单、注入故障强度、build_info。')
-BULLET('kubernetes_sd_configs + Pod 注解自动发现 ordersvc:9090/metrics，无需手动配置 target。')
-BULLET('Recording Rules 预聚合高频 counter，避免告警查询全量扫描原始序列。')
-H2('7.2 Logs（日志）—— Loki + Promtail + KS3')
-BULLET('Promtail 以 DaemonSet 部署，5 节点全覆盖，采集 ordersvc 结构化日志。')
-BULLET('Loki chunks 落金山云 KS3（S3 兼容 API），实现存算分离与长期归档。')
-H2('7.3 Traces（链路）—— OpenTelemetry + Jaeger')
-BULLET('ordersvc 经 OTLP 上报 trace 至 OTel Collector，再转 Jaeger 存储。')
-BULLET('一次 /order 调用的端到端链路可在 Jaeger UI 查询，故障时可快速定位慢调用。')
-H2('7.4 Grafana SLO 大盘（16 个面板）')
-TABLE(['面板组', '面板', '含义'],
-[
-  ['SLO 核心', '错误预算剩余（gauge）', '1 − 1d错误率，仪表盘直观显示本月预算还剩多少'],
-  ['', '错误预算消耗速率 1d', 'burn_rate1d，>1 表示按当前速率 30 天烧光预算'],
-  ['', '可用性 SLI（1h）', '1 − 1h错误率，实时可用性'],
-  ['燃烧率', '错误预算燃烧率（5m/1h）', '双窗口燃烧率时序，超 14.4 触发 Page'],
-  ['延迟', 'P99 延迟 / 延迟分位 P50-P999', 'histogram_quantile 计算各分位延迟，对照 SLO 500ms'],
-  ['流量', 'QPS / 请求成功失败计数 / 订单创建失败', '请求量与错误请求分解'],
-  ['关联', 'QPS vs 错误率 / Pod 副本数', '流量与错误关联、HPA 自愈可视化'],
-  ['演练', '注入故障强度', '当前注入的 fail_rate 与 latency'],
-])
+H3('Traces —— Jaeger + OpenTelemetry')
+P('ordersvc 用 OTel SDK 埋点，全链路 trace 上报 Jaeger，故障可定位到具体 span（如 /order 处理慢在哪一段）。')
 
-# ============ 八、混沌工程 ============
-H1('八、混沌工程')
-P('用 Chaos Mesh 主动注入故障，验证可靠性假设（不等真实故障才发现短板）：')
-TABLE(['实验', '类型', '验证的可靠性假设'],
-[
-  ['Pod Kill', 'PodChaos', '随机杀 Pod，K8s 30s 内自愈，SLO 不击穿'],
-  ['Network Delay 200ms', 'NetworkChaos', 'P99 延迟告警触发，服务仍可用'],
-  ['CPU Stress 80%', 'StressChaos', 'HPA 触发扩容，CPU 回落'],
-  ['HTTP 50% 5xx', '/admin/fault', '错误预算燃烧率告警触发'],
-])
-P('Chaos Mesh 组件：chaos-controller-manager + chaos-daemon(DaemonSet 5/5) + chaos-dashboard + chaos-dns-server，全部 Running。', italic=True)
+H2('4.3 告警链路闭环（Alertmanager）')
+P('Prometheus 告警规则 firing 后推送 Alertmanager，完成分组去重、抑制、路由通知，闭环"告警如何触达 oncall"：')
+BULLET('group_by [alertname, slo, severity] 聚合同源告警，5 窗口×多指标同时 firing 只通知一次。', '• ')
+BULLET('inhibit_rules：同 SLO 下 Page 抑制 Ticket；混沌演练期 chaos=true 抑制 Page，演练故障不打扰真实 oncall。', '• ')
+BULLET('飞书 webhook 通知，send_resolved=true 恢复时也通知。', '• ')
+BULLET('Enrichment：4 个业务告警带 runbook_url（GitHub raw）+ dashboard_url（Grafana deep link），一键跳转排障。', '• ')
+A('实测：注入 fail=1.0 故障，burn_rate5m 达 69.5，OrdersvcHighErrorRatePage firing，'
+  'Alertmanager 收到带 runbook_url 的告警，链路端到端验证通过。')
 
-# ============ 九、故障自愈 ============
-H1('九、故障自愈机制')
-BULLET('三类探针：liveness（失败重启容器）、readiness（失败摘除流量）、startup（慢启动保护）。')
-BULLET('HPA 弹性：基于 CPU 利用率与在途订单数自动扩缩容，实测故障期间 Pod 从 3 扩到 20。')
-BULLET('滚动发布零宕机：Deployment maxUnavailable=0 + maxSurge=1，新 Pod ready 后才下旧 Pod。')
-BULLET('熔断降级：/admin/fault 接口热更新故障率，验证降级与告警联动。')
+H2('4.4 混沌工程验证（Chaos Mesh）')
+P('主动制造故障验证系统韧性，而非等真实故障才发现短板：')
+BULLET('PodKill：验证 K8s 自愈（Pod 被杀后自动重建、流量自动转移）。', '• ')
+BULLET('NetworkDelay：注入网络延迟，验证延迟 SLO 告警与 P99 监控。', '• ')
+BULLET('CPUStress：压测 CPU，验证 HPA 弹性扩容是否及时触发。', '• ')
+BULLET('应用层故障注入：ordersvc /admin/fault 热更新失败率与延迟，触发燃烧率告警验证 SLO 链路。', '• ')
 
-# ============ 十、实测验证 ============
-H1('十、实测验证数据（金山云 KEC 集群实跑）')
-P('项目已在金山云 KEC 5 节点真实集群端到端跑通，以下为实测数据（非本地模拟）。', italic=True)
-H2('10.1 集群与服务状态')
-BULLET('5 节点全部 Ready；ordersvc 3/3 Running，镜像从 KECR 拉取，healthz=200。')
-BULLET('可观测性栈全 Running，Prometheus 自动采集 3 个 ordersvc Pod metrics（target up）。')
-BULLET('Chaos Mesh 全就绪，三类实验注入验证通过。')
-H2('10.2 流量压测')
-P('20 QPS 持续 10 分钟：成功 1391 / 总 1418 = 成功率 98.10%，失败 27（注入的 50% 故障样本）。')
-H2('10.3 SLO 燃烧率告警实测（核心验证）')
-P('注入 50% 5xx 故障 + 200ms 延迟后，关键指标实测：')
-TABLE(['指标 / 告警', '实测值', '阈值', '结论'],
-[
-  ['燃烧率 5m', '76.4', '> 14.4', '超阈值 5 倍，预算高速燃烧'],
-  ['燃烧率 1h', '58.8', '> 14.4', '双窗口均超 → Page 告警触发'],
-  ['燃烧率 1d', '58.8', '> 1', 'Budget 预警触发'],
-  ['错误率 5m', '7.6%', '允许 0.1%', '超标 76 倍'],
-  ['错误预算剩余', '94.1%', '100%', '已消耗约 6% 月预算'],
-  ['可用性 1h', '95.9%', '99.9%', '低于 SLO 目标'],
-  ['P99 延迟', '237ms', '< 500ms', '延迟 SLO 仍达标'],
-  ['Pod 副本数', '20', '初始 3', 'HPA 扩容 6.7 倍'],
-  ['OrdersvcHighErrorRatePage', 'firing', '—', 'Page 告警已触发'],
-  ['OrdersvcChaosInjected', 'firing', '—', '混沌注入标记告警'],
-])
-P('恢复 fail_rate=0 后燃烧率回落、告警自动消除——证明告警链路闭环：'
-  '指标采集 → 燃烧率计算 → 多窗口判定 → 告警触发/恢复。', italic=True)
-H2('10.4 混沌工程实测')
-BULLET('PodChaos：杀 1 个 Pod，Deployment 自动重建，SLI 未击穿——自愈验证通过。')
-BULLET('NetworkChaos：AllInjected=True，目标节点注入网络延迟。')
-BULLET('StressChaos：注入 90s CPU 压力，HPA 基于 CPU 决策扩缩。')
+H2('4.5 K8s 自愈')
+P('ordersvc Deployment 配置 liveness/readiness 双探针 + HPA：')
+BULLET('livenessProbe：进程死锁/崩溃自动重启容器。', '• ')
+BULLET('readinessProbe：未就绪自动从 Service Endpoints 摘除，流量不打进不健康实例。', '• ')
+BULLET('HPA：基于 CPU/自定义指标自动扩缩容，应对流量激增。', '• ')
 
-# ============ 十一、SRE 思维 ============
-H1('十一、项目体现的 SRE 思维')
-BULLET('数据驱动稳定性：所有决策基于 SLO 指标与错误预算，而非主观感觉。')
-BULLET('消除琐事：故障注入 / 自愈 / 扩缩容全部自动化，减少人工介入。')
-BULLET('拥抱错误预算：允许小故障消耗预算，告警只在预算高速燃烧时触发，避免告警疲劳。')
-BULLET('可观测性先行：Metrics / Logs / Traces 三支柱齐全，故障可定位、可复盘。')
-BULLET('主动验证：混沌工程主动制造故障验证假设，而非等真实故障才发现短板。')
-BULLET('云原生落地：在金山云真实多节点集群跑通，接入 KECR / KS3，非本地 demo。')
+H2('4.6 SRE 运营闭环（持续改进）')
+P('让稳定性"可运营"而非一次性定义，覆盖持续改进的全链路：')
+H3('SLO 周期报告')
+P('slo-report.py 查询 Prometheus recording rules，生成月度 SLO 达成报告（SLI / 错误预算剩余 / 燃烧率趋势 / 调整建议），'
+  '主动回顾而非被动等告警。')
+H3('Toil 量化驱动自动化')
+P('toil-log.py 记录每次手动干预（任务/耗时/可自动化），toil-report.py 聚合算成本（元/分钟）排自动化优先级。'
+  '实测回填 5 条 toil：总 84 分钟、可自动化 76%、可回收成本 160 元，ks3-integration-debug 列 P0 优先自动化。')
+H3('Postmortem 闭环')
+P('schema.json 定义必填章节（概要/影响/根因/行动项），validate-postmortem.py 校验，'
+  '行动项强制 ≥1 个 DONE/IN-PROGRESS，禁止全 TODO 堆积。本次混沌演练的"打 chaos label 抑制告警"行动项已 DONE，'
+  '落地为 Alertmanager inhibit_rules，形成"复盘 → 行动 → 落地 → 闭环"。')
 
-# ============ 十二、关键代码解析 ============
-H1('十二、关键代码解析')
-P('本章摘取项目中最能体现 SRE 工程能力的代码段，逐段解释设计意图。', italic=True)
+# ============ 五、最终成果 ============
+H1('五、最终成果')
 
-H2('12.1 指标定义（internal/metrics/metrics.go）—— SLO 的数据基础')
-P('设计原则：只暴露对 SLO 计算与告警有用的指标，避免指标爆炸。每个指标都对应一个 SRE 用途。')
-CODE('type OrderServiceMetrics struct {\n'
-     '    // Counter：按 method/path/code 维度统计请求总量 → 算可用性 SLI（成功率）\n'
-     '    HTTPRequestsTotal *prometheus.CounterVec\n'
-     '    // Histogram：延迟直方图，Bucket 覆盖 5ms~10s → 算延迟 SLI（P99 < 500ms）\n'
-     '    HTTPRequestDurationSeconds *prometheus.HistogramVec\n'
-     '    // Gauge：当前在途订单数 → HPA 扩缩容决策 + 容量观察\n'
-     '    OrdersInFlight prometheus.Gauge\n'
-     '    OrdersCreatedTotal prometheus.Counter   // 业务侧下单成功总量\n'
-     '    OrdersFailedTotal *prometheus.CounterVec // 失败总量（按 reason）\n'
-     '    FailureRateInjected prometheus.Gauge     // 当前注入故障率（混沌演练标记）\n'
-     '    LatencyInjectedMs   prometheus.Gauge     // 当前注入延迟\n'
-     '    BuildInfo *prometheus.GaugeVec           // 版本追踪\n'
-     '}')
-P('要点解释：', bold=True)
-BULLET('HTTPRequestsTotal 用 CounterVec（带 method/path/code label）：code label 是关键——'
-      'Prometheus 规则用 code=~"5.." 过滤错误请求，算出错误率。这就是可用性 SLI 的原始数据。')
-BULLET('HTTPRequestDurationSeconds 用 HistogramVec 而非 Summary：Histogram 分桶存（le 标签），'
-      '服务端用 histogram_quantile() 算任意分位，且能跨 3 个 Pod 聚合；Summary 在客户端预算分位、不可聚合。')
-BULLET('OrdersInFlight 用 Gauge（可增可减）：下单 Inc、结束 Dec，反映实时并发，HPA 可据此扩缩。')
-BULLET('FailureRateInjected 是 Gauge：把"当前注入了多少故障"也变成指标，大盘可显示，告警 OrdersvcChaosInjected 据此触发。')
+H2('5.1 集群与部署')
+CODE('金山云 KEC 5 节点 K8s 集群（3 master + 2 node）\n'
+     '  K8s v1.31.14 / Calico / containerd 2.2.6 / Rocky 9.8\n'
+     '  接入金山云 KECR（私有镜像仓库）+ KS3（Loki 对象存储）\n\n'
+     '访问入口（NodePort）：\n'
+     '  ordersvc     :30088      Prometheus :30090    Grafana :30300\n'
+     '  Jaeger       :30686      Alertmanager :30093')
 
-H2('12.2 指标采集中间件（internal/handler/handler.go）—— SLO 数据的产生点')
-P('instrument 中间件包装所有路由，统一记录延迟与请求计数。这是 SLO 计算（成功率/延迟）的唯一数据来源。')
-CODE('func (h *Handler) instrument(next http.Handler) http.Handler {\n'
-     '    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n'
-     '        start := time.Now()\n'
-     '        // statusRecorder 包装 ResponseWriter，捕获真实响应状态码\n'
-     '        ww := &statusRecorder{ResponseWriter: w, status: 200}\n'
-     '        next.ServeHTTP(ww, r)\n'
-     '        elapsed := time.Since(start).Seconds()\n'
-     '\n'
-     '        // 记录延迟（Histogram.Observe）+ 请求计数（Counter.Inc）\n'
-     '        h.metrics.HTTPRequestDurationSeconds.WithLabelValues(\n'
-     '            r.Method, r.URL.Path).Observe(elapsed)\n'
-     '        h.metrics.HTTPRequestsTotal.WithLabelValues(\n'
-     '            r.Method, r.URL.Path, strconv.Itoa(ww.status)).Inc()\n'
-     '\n'
-     '        // 给每条请求补一个 server span（含状态码），串联业务 span\n'
-     '        span := trace.SpanFromContext(r.Context())\n'
-     '        span.SetAttributes(attribute.Int("http.status_code", ww.status))\n'
-     '    })\n'
-     '}')
-P('要点解释：', bold=True)
-BULLET('statusRecorder 包装 ResponseWriter：标准 http.ResponseWriter 无法读已写状态码，'
-      '包装后才能拿到真实 code（200/500 等），喂给 CounterVec 的 code label。这是指标准确性的关键。')
-BULLET('一个中间件搞定全路由：避免每个 handler 重复写指标代码，符合"消除琐事"原则。')
-BULLET('指标 + trace 同一中间件产生：指标算 SLO（是否稳），trace 定位根因（为什么不稳），数据同源联动。')
+H2('5.2 实测验证数据')
+table(
+    ['验证项', '方法', '结果'],
+    [
+        ['SLO 告警链路', '注入 fail=1.0 + 持续打流量', 'burn_rate5m=69.5，OrdersvcHighErrorRatePage firing，Alertmanager 收到带 runbook_url 告警'],
+        ['KS3 存算分离', 'Loki 接 KS3 + flush + list bucket', 'KS3 出现 100+ fake/ chunks 对象，Loki series 返回 ordersvc 日志流'],
+        ['告警分级抑制', '混沌演练 chaos=true', 'info 告警路由 null-receiver，演练期 Page 被抑制不打扰 oncall'],
+        ['Toil 量化', '回填 5 条手动干预', '总 84min，可自动化 76%，可回收成本 160 元'],
+        ['Postmortem 闭环', 'validate-postmortem.py 校验', '章节齐全 + 行动项 ≥1 DONE，闭环通过'],
+        ['SLO 达成报告', 'slo-report.py 查 Prom', '生成月度报告：SLI/错误预算剩余/燃烧率趋势/调整建议'],
+    ]
+)
 
-H2('12.3 故障注入与业务逻辑（createOrder）—— 混沌验证的核心')
-P('createOrder 演示了如何在业务代码里支持混沌演练：热更新故障率/延迟，按概率返回 5xx。')
-CODE('func (h *Handler) createOrder(w http.ResponseWriter, r *http.Request) {\n'
-     '    ctx := r.Context()\n'
-     '    tracer := otel.Tracer("ordersvc")\n'
-     '    ctx, span := tracer.Start(ctx, "createOrder")   // 开业务 span\n'
-     '    defer span.End()\n'
-     '\n'
-     '    h.metrics.OrdersInFlight.Inc()                  // 在途 +1\n'
-     '    defer h.metrics.OrdersInFlight.Dec()            // defer 保证结束 -1（即使 panic）\n'
-     '\n'
-     '    // 注入处理延迟：模拟下游支付/库存调用耗时\n'
-     '    if h.latencyMs > 0 {\n'
-     '        _, sleepSpan := tracer.Start(ctx, "downstream.payment")\n'
-     '        time.Sleep(time.Duration(h.latencyMs) * time.Millisecond)\n'
-     '        sleepSpan.End()\n'
-     '    }\n'
-     '\n'
-     '    // 注入失败：按概率返回 500，验证 SLO 错误预算与告警\n'
-     '    if h.failRate > 0 && rand.Float64() < h.failRate {\n'
-     '        h.metrics.OrdersFailedTotal.WithLabelValues("injected_500").Inc()\n'
-     '        w.WriteHeader(http.StatusInternalServerError)\n'
-     '        return\n'
-     '    }\n'
-     '\n'
-     '    // 成功下单\n'
-     '    orderID := strconv.FormatInt(time.Now().UnixNano(), 36)\n'
-     '    h.metrics.OrdersCreatedTotal.Inc()\n'
-     '    w.WriteHeader(http.StatusCreated)\n'
-     '}')
-P('要点解释：', bold=True)
-BULLET('defer h.metrics.OrdersInFlight.Dec()：用 defer 保证在途计数一定递减，即使中途 return 或 panic，Gauge 不泄漏。')
-BULLET('延迟注入单独开 downstream.payment span：Jaeger 里能看到"下游支付耗时 X ms"的子 span，'
-      '故障时能精确定位是哪一段慢，而非笼统看总延迟。')
-BULLET('按概率 rand.Float64() < h.failRate 返回 500：failRate=0.5 即 50% 请求失败，'
-      '这些 500 被 instrument 中间件记进 HTTPRequestsTotal{code="500"}，Prometheus 算出错误率 → 触发燃烧率告警。'
-      '这就是"注入故障 → 指标变化 → 告警触发"闭环的业务侧起点。')
+H2('5.3 落地的 SRE 核心能力')
+BULLET('SLO 与错误预算：单一事实源 spec + 多窗口燃烧率告警。', '✓ ')
+BULLET('可观测性三支柱：Prometheus/Loki(+KS3)/Jaeger 全覆盖。', '✓ ')
+BULLET('告警链路闭环：Alertmanager 分组/抑制/触达 + runbook enrichment。', '✓ ')
+BULLET('混沌工程：Chaos Mesh 三类实验主动验证韧性。', '✓ ')
+BULLET('故障自愈：HPA + 双探针，被动自愈。', '✓ ')
+BULLET('运营闭环：SLO 周期报告 + Toil 量化 + Postmortem 闭环，持续改进。', '✓ ')
+BULLET('云原生落地：金山云 KEC + KECR + KS3 三层云产品真实接入。', '✓ ')
 
-H2('12.4 故障热更新接口（setFault）—— 不重启即可演练')
-P('/admin/fault 接口运行时热更新故障参数，无需重启 Pod，便于混沌实验动态控制。')
-CODE('// 例：/admin/fault?fail=0.5&latency=300\n'
-     'func (h *Handler) setFault(w http.ResponseWriter, r *http.Request) {\n'
-     '    if v := r.URL.Query().Get("fail"); v != "" {\n'
-     '        if rate, err := strconv.ParseFloat(v, 64); err == nil && rate >= 0 && rate <= 1 {\n'
-     '            h.failRate = rate\n'
-     '            h.metrics.FailureRateInjected.Set(rate)   // 同步更新指标\n'
-     '        }\n'
-     '    }\n'
-     '    if v := r.URL.Query().Get("latency"); v != "" {\n'
-     '        if ms, err := strconv.Atoi(v); err == nil && ms >= 0 {\n'
-     '            h.latencyMs = ms\n'
-     '            h.metrics.LatencyInjectedMs.Set(float64(ms))\n'
-     '        }\n'
-     '    }\n'
-     '    json.NewEncoder(w).Encode(map[string]any{\n'
-     '        "fail_rate": h.failRate, "latency_ms": h.latencyMs})\n'
-     '}')
-P('要点解释：', bold=True)
-BULLET('热更新 + 指标同步：改 failRate 的同时更新 FailureRateInjected 指标，大盘实时显示当前注入强度，告警 OrdersvcChaosInjected 也据此 firing。')
-BULLET('参数校验：rate 限 [0,1]、ms 限 ≥0，防止非法值导致行为异常。')
-BULLET('chaos-inject-fault.sh 脚本就是调这个接口：注入 50% 故障 → 燃烧率飙到 76.4 → Page 告警 firing。')
+H2('5.4 交付物')
+BULLET('项目代码与文档：github.com/gyt-golang/sre-platform-ksce（开源）', '• ')
+BULLET('一键部署脚本：bootstrap-ksce.sh（凭证经环境变量注入，不入库）', '• ')
+BULLET('项目技术文档：docs/项目技术文档.md（含实测数据与面试讲解稿）', '• ')
+BULLET('SLO 报告：docs/slo-report-2026-08.md', '• ')
+BULLET('Toil 报告：docs/toil-report-2026-08.md', '• ')
+BULLET('面经脚本：gen-interview.py 生成面试问答 .docx', '• ')
 
-H2('12.5 OpenTelemetry 链路初始化（internal/trace/trace.go）')
-P('初始化 OTel TracerProvider，经 OTLP/HTTP 上报到 Jaeger，service name 来自环境变量。')
-CODE('func Init(ctx context.Context) (func(context.Context) error, error) {\n'
-     '    exporter, err := otlptracehttp.New(ctx,\n'
-     '        otlptracehttp.WithEndpoint(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")),\n'
-     '        otlptracehttp.WithInsecure())\n'
-     '    res, _ := resource.New(ctx,\n'
-     '        resource.WithAttributes(semconv.ServiceName(os.Getenv("OTEL_SERVICE_NAME"))))\n'
-     '    tp := sdktrace.NewTracerProvider(\n'
-     '        sdktrace.WithBatcher(exporter),     // 批量上报降开销\n'
-     '        sdktrace.WithResource(res),\n'
-     '        // 全量采样：故障演练时抓完整链路；生产可换 TraceIDRatioBased(0.1)\n'
-     '        sdktrace.WithSampler(sdktrace.AlwaysSample()),\n'
-     '    )\n'
-     '    otel.SetTracerProvider(tp)\n'
-     '    otel.SetTextMapPropagator(propagation.TraceContext{}) // W3C TraceContext\n'
-     '    return tp.Shutdown, nil\n'
-     '}')
-P('要点解释：', bold=True)
-BULLET('WithBatcher：批量上报 trace，降低对业务请求的同步开销。')
-BULLET('AlwaysSample：全量采样，故障演练时保证抓到完整链路；生产可换 TraceIDRatioBased(0.1) 降 10% 采样省开销。')
-BULLET('TraceContext propagator：用 W3C 标准透传 traceID，跨服务链路串联，Jaeger 能看到端到端调用。')
-
-H2('12.6 优雅关闭（main.go）—— 零宕机的一环')
-P('捕获 SIGTERM 信号，5 秒超时优雅关闭，配合滚动发布实现零宕机。')
-CODE('func main() {\n'
-     '    ctx, stop := signal.NotifyContext(context.Background(),\n'
-     '        syscall.SIGINT, syscall.SIGTERM)\n'
-     '    defer stop()\n'
-     '    // ... 启动 HTTP 服务 ...\n'
-     '    <-ctx.Done()                      // 阻塞直到收到信号\n'
-     '    shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)\n'
-     '    defer cancel()\n'
-     '    _ = srv.Shutdown(shutCtx)         // 优雅关闭：处理完在途请求再退出\n'
-     '}')
-P('要点解释：', bold=True)
-BULLET('滚动发布时旧 Pod 收到 SIGTERM：若不优雅关闭，在途请求会被中断导致 5xx。'
-      'Shutdown() 让 server 停止接新请求、处理完在途请求再退出。')
-BULLET('5 秒超时兜底：防止某些请求卡死导致 Pod 长期不退出（K8s 默认 30s 后强杀）。'
-      '配合 Deployment 的 terminationGracePeriodSeconds 调优。')
-
-H2('12.7 Prometheus SLO 规则（prometheus.yaml ConfigMap）—— 燃烧率引擎')
-P('5 窗口 Recording Rules 预聚合 + 3 档告警，是整个 SLO 引擎的核心。摘录关键规则：')
-CODE('# 错误比率 = 错误请求速率 / 总请求速率（5 个窗口）\n'
-     '- record: ordersvc:error_ratio5m\n'
-     '  expr: ordersvc:error_rate5m / ordersvc:request_rate5m\n'
-     '\n'
-     '# 燃烧率 = 错误率 / 允许错误率(0.001)\n'
-     '- record: ordersvc:burn_rate5m\n'
-     '  expr: ordersvc:error_ratio5m / 0.001\n'
-     '\n'
-     '# Page 告警：5m & 1h 双窗口同时 > 14.4（1h 耗 ≥2% 月预算）\n'
-     '- alert: OrdersvcHighErrorRatePage\n'
-     '  expr: |\n'
-     '    ordersvc:burn_rate5m > 14.4\n'
-     '    and ordersvc:burn_rate1h > 14.4\n'
-     '  for: 2m                         # 持续 2 分钟才 firing（防抖）\n'
-     '  labels: {severity: page, slo: availability-99.9}')
-P('要点解释：', bold=True)
-BULLET('分层预聚合：原始 counter → error_rate/request_rate → error_ratio → burn_rate，'
-      '每层用上一层结果，避免告警查询全量扫描原始序列（性能优化）。')
-BULLET('双窗口 and：5m 和 1h 都超阈值才告警，短窗口快速发现 + 长窗口防抖降噪，避免瞬时抖动误报。')
-BULLET('for: 2m：双窗口超阈值后还需持续 2 分钟才转 firing，进一步防抖（实测 pending→firing 约 2 分钟）。')
-BULLET('允许错误率 0.001 = 1 − 99.9% SLO：燃烧率阈值不是拍脑袋，而是从 SLO 推导（14.4 = 1h 耗 2% 月预算的理论值）。')
-
-H2('12.8 Deployment 探针与自愈（deploy/manifests/ordersvc.yaml）')
-P('三类探针 + 滚动发布配置，是 K8s 自愈能力的工作负载侧配置：')
-CODE('livenessProbe:           # 失败则重启容器（救死）\n'
-     '  httpGet: {path: /healthz, port: http}\n'
-     '  initialDelaySeconds: 5\n'
-     'readinessProbe:          # 失败则摘除流量但不重启（救活）\n'
-     '  httpGet: {path: /readyz, port: http}\n'
-     '  initialDelaySeconds: 3\n'
-     'strategy:\n'
-     '  type: RollingUpdate\n'
-     '  rollingUpdate:\n'
-     '    maxUnavailable: 0     # 先起新 Pod 才下旧 Pod → 零宕机\n'
-     '    maxSurge: 1           # 最多多起 1 个新 Pod\n'
-     'terminationGracePeriodSeconds: 30  # 优雅关闭宽限期')
-P('要点解释：', bold=True)
-BULLET('liveness 查 /healthz：进程卡死时 K8s 重启容器。')
-BULLET('readiness 查 /readyz：未就绪时从 Endpoints 摘除，不接流量但不重启——故障 Pod 自愈期间不影响用户。')
-BULLET('maxUnavailable: 0：滚动发布时保证可用副本数不降，配合 readiness 探针实现零宕机。')
-
-# ============ 十三、目录结构 ============
-H1('十三、项目目录结构')
-CODE('sre-project/\n'
-     '├── app/                      # Go 微服务（main + handler + metrics + trace + Dockerfile）\n'
-     '├── deploy/\n'
-     '│   ├── manifests/ordersvc.yaml  # Deployment/HPA/Probe/ConfigMap(SLO)/imagePullSecrets\n'
-     '│   └── scripts/                # bootstrap-ksce.sh / load-test / chaos-inject / 远程与镜像搬运\n'
-     '├── observability/\n'
-     '│   ├── prometheus/           # Prometheus + SLO 规则(26条) + kube-state-metrics\n'
-     '│   ├── grafana/              # Grafana + 16 面板 SLO 大盘 provisioning\n'
-     '│   ├── loki/                 # Loki + Promtail(chunks 落 KS3)\n'
-     '│   └── jaeger/               # OTel Collector + Jaeger\n'
-     '├── chaos/experiments.yaml    # Chaos Mesh 三类实验\n'
-     '├── postmortem/               # 事故复盘模板与示例\n'
-     '└── docs/                     # 项目技术文档、runbook')
-
-# ============ 十四、一键部署 ============
-H1('十四、一键部署')
-CODE('export KSCE_PWD=<master root 密码>\n'
-     'export KECR_PWD=<KECR 登录密码>\n'
-     'bash deploy/scripts/bootstrap-ksce.sh                                  # 一键部署\n'
-     'SRE_HOST=10.0.0.182 bash deploy/scripts/load-test.sh 20 600        # 打流量\n'
-     'SRE_HOST=10.0.0.182 bash deploy/scripts/chaos-inject-fault.sh 0.5 200  # 注入故障')
-
-doc.save(r'C:\Users\KC\Desktop\秋招\简历\简历\设计师修改\基于金山云平台的SRE可靠性工程平台-项目报告-v2.docx')
-print('OK 报告已生成（v2）')
+doc.save(r'C:\Users\KC\Desktop\秋招\简历\简历\设计师修改\基于金山云平台的SRE可靠性工程平台-项目报告-v3.docx')
+print('OK 报告已生成（v3，新结构：项目背景/技术栈/项目痛点/核心职责/最终成果）')

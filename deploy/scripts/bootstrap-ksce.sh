@@ -2,9 +2,9 @@
 # 基于金山云平台的 SRE 可靠性工程平台 —— 一键部署脚本（金山云 KEC 真实多节点集群版）
 #
 # 目标集群：金山云 KEC 5 节点（3 master + 2 node）K8s v1.31 / Calico / containerd
-# 云产品：  KECR（镜像仓库）+ KS3（Loki 对象存储，可选）
+# 云产品：  KECR（镜像仓库）+ KS3（Loki 对象存储，存算分离）
 # 前置：
-#   1. export KSCE_PWD=<master root 密码> KECR_PWD=<KECR 登录密码>
+#   1. export KSCE_PWD=<master root 密码> KECR_PWD=<KECR 登录密码> KS3_AK=<KS3 AK> KS3_SK=<KS3 SK>
 #   2. deploy/scripts/kubeconf-ksce.conf 已就绪（公网化 kubeconfig）
 #   3. 安全组放行 30088/30090/30300/30686
 # 用法：bash deploy/scripts/bootstrap-ksce.sh
@@ -30,6 +30,8 @@ command -v kubectl >/dev/null || { err "缺少 kubectl"; exit 1; }
 command -v python  >/dev/null || { err "缺少 python+paramiko"; exit 1; }
 [ -n "${KSCE_PWD:-}" ] || { err "请先 export KSCE_PWD=<master root 密码>"; exit 1; }
 [ -n "${KECR_PWD:-}" ] || { err "请先 export KECR_PWD=<KECR 登录密码>"; exit 1; }
+[ -n "${KS3_AK:-}" ]  || { err "请先 export KS3_AK=<金山云 KS3 Access Key ID>"; exit 1; }
+[ -n "${KS3_SK:-}" ]  || { err "请先 export KS3_SK=<金山云 KS3 Secret Access Key>"; exit 1; }
 kubectl get nodes >/dev/null 2>&1 || { err "kubeconfig 不可用，请检查 $KCONFIG"; exit 1; }
 log "集群连通 ✓  $(kubectl get nodes -o name | wc -l) 节点"
 
@@ -59,9 +61,17 @@ kubectl -n sre-demo rollout status deployment/ordersvc --timeout=300s || true
 
 # 5. 可观测性三支柱（镜像走节点加速器拉取）
 log "部署可观测性栈（Prometheus / Grafana / Loki+Promtail / Jaeger+OTel）..."
+# Alertmanager：告警链路闭环（分组/抑制/飞书通知）。apply 前 sed 注入 __FEISHU_WEBHOOK__；
+# 未配置 FEISHU_WEBHOOK 时默认本地 echo，Alertmanager 正常运行、UI 可见告警，仅通知发不出。
+FEISHU_WEBHOOK="${FEISHU_WEBHOOK:-http://127.0.0.1:9999/feishu}"
+sed "s|__FEISHU_WEBHOOK__|${FEISHU_WEBHOOK}|g" observability/alertmanager/alertmanager.yaml | kubectl apply -f -
 kubectl apply -f observability/prometheus/prometheus.yaml
+# prometheus 无 config-reloader sidecar，改 alerting 配置后重启读新 alertmanager targets
+kubectl -n observability rollout restart deployment/prometheus
 kubectl apply -f observability/grafana/grafana.yaml
-kubectl apply -f observability/loki/loki.yaml
+# Loki chunks 落金山云 KS3：apply 前用 sed 将 __KS3_AK__/__KS3_SK__ 占位符替换为环境变量（真实 AK/SK 不入库）
+sed -e "s|__KS3_AK__|${KS3_AK}|g" -e "s|__KS3_SK__|${KS3_SK}|g" \
+  observability/loki/loki.yaml | kubectl apply -f -
 kubectl apply -f observability/jaeger/jaeger.yaml
 # PrometheusRule CRD（需 Prometheus Operator，裸 Prometheus 用 ConfigMap 版规则，容错跳过）
 kubectl apply -f observability/prometheus/prometheus-rule-slo.yaml 2>/dev/null || true

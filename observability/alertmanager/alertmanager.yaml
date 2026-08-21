@@ -1,0 +1,79 @@
+# 可观测性 —— 告警链路闭环：Alertmanager
+# Prometheus 告警规则 firing 后推送至此，按 severity 分组去重、抑制、路由通知。
+#   - group_by 聚合同源告警，避免告警风暴（5 窗口 × 多指标同时 firing 只通知一次）
+#   - inhibit_rules：同一 SLO 下 Page 抑制 Ticket；混沌演练期抑制 Page，演练故障不打扰 oncall
+#   - 通知走飞书 webhook（占位符 __FEISHU_WEBHOOK__，bootstrap-ksce.sh apply 前从环境变量注入；
+#     未配置时指向本地 echo，Alertmanager 正常运行、UI 可见告警，仅通知发不出）
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: observability
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: feishu-webhook
+      group_by: [alertname, slo, severity]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      routes:
+        # info 级（混沌演练标记）不通知，仅留作 UI 可见
+        - matchers: ['severity="info"']
+          receiver: null-receiver
+    receivers:
+      - name: feishu-webhook
+        webhook_configs:
+          - url: __FEISHU_WEBHOOK__
+            send_resolved: true
+      - name: null-receiver
+    inhibit_rules:
+      # 同一 SLO 下 Page 告警抑制 Ticket，避免高低级告警重复通知 oncall
+      - source_matchers: ['severity="page"']
+        target_matchers: ['severity="ticket"']
+        equal: ['slo']
+      # 混沌演练期抑制 Page 告警，演练注入的故障不打扰真实 oncall
+      - source_matchers: ['chaos="true"']
+        target_matchers: ['severity="page"']
+        equal: ['slo']
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: observability
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: alertmanager}}
+  template:
+    metadata: {labels: {app: alertmanager}}
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.27.0
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+          ports:
+            - {name: web, containerPort: 9093}
+          volumeMounts:
+            - {name: config, mountPath: /etc/alertmanager}
+            - {name: data, mountPath: /alertmanager}
+      volumes:
+        - name: config
+          configMap: {name: alertmanager-config}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: observability
+spec:
+  type: NodePort
+  selector: {app: alertmanager}
+  ports: [{name: web, port: 9093, targetPort: web, nodePort: 30093}]

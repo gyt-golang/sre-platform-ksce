@@ -109,6 +109,8 @@ data:
             for: 2m
             labels: {severity: page, slo: availability-99.9, team: sre}
             annotations:
+              runbook_url: "https://raw.githubusercontent.com/gyt-golang/sre-platform-ksce/main/docs/runbook/ordersvc-high-error-rate.md"
+              dashboard_url: "http://10.0.0.182:30300/d/ordersvc-sre-slo/ordersvc-sre-slo"
               summary: "ordersvc 可用性急剧恶化，错误预算高速燃烧"
               description: "5m 与 1h 窗口燃烧率均超 14.4，1 小时内已消耗 ≥2% 月错误预算。"
               runbook: "docs/runbook/ordersvc-high-error-rate.md"
@@ -120,6 +122,8 @@ data:
             for: 15m
             labels: {severity: ticket, slo: availability-99.9, team: sre}
             annotations:
+              runbook_url: "https://raw.githubusercontent.com/gyt-golang/sre-platform-ksce/main/docs/runbook/ordersvc-high-error-rate.md"
+              dashboard_url: "http://10.0.0.182:30300/d/ordersvc-sre-slo/ordersvc-sre-slo"
               summary: "ordersvc 错误率持续偏高，预算稳步消耗"
               description: "30m 与 6h 窗口燃烧率均超 6，6 小时内消耗约 5% 月错误预算。"
           # 预算预警（Budget）：1d 窗口，燃烧率 > 1。按当前速率 30 天将耗尽预算 → 排期优化。
@@ -128,6 +132,8 @@ data:
             for: 1h
             labels: {severity: ticket, slo: availability-99.9, team: sre}
             annotations:
+              runbook_url: "https://raw.githubusercontent.com/gyt-golang/sre-platform-ksce/main/docs/runbook/ordersvc-high-error-rate.md"
+              dashboard_url: "http://10.0.0.182:30300/d/ordersvc-sre-slo/ordersvc-sre-slo"
               summary: "ordersvc 错误预算按当前速率将在 30 天内耗尽"
               description: "1d 窗口燃烧率 > 1，需排期优化，避免预算提前耗尽。"
           # 延迟告警：P99 > 500ms SLO
@@ -136,6 +142,8 @@ data:
             for: 5m
             labels: {severity: ticket, slo: latency-500ms, team: sre}
             annotations:
+              runbook_url: "https://raw.githubusercontent.com/gyt-golang/sre-platform-ksce/main/docs/runbook/ordersvc-high-error-rate.md"
+              dashboard_url: "http://10.0.0.182:30300/d/ordersvc-sre-slo/ordersvc-sre-slo"
               summary: "ordersvc P99 延迟超 500ms SLO"
           # 混沌演练标记
           - alert: OrdersvcChaosInjected
@@ -161,7 +169,7 @@ data:
     alerting:
       alertmanagers:
         - static_configs:
-            - targets: []
+            - targets: ['alertmanager:9093']
     scrape_configs:
       # 自动发现带 prometheus.io/scrape 注解的 Pod（ordersvc 即此方式）
       - job_name: 'kubernetes-pods'

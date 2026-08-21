@@ -42,6 +42,6 @@
 ## 行动项
 | 行动项 | 类型 | Owner | 截止 | 状态 |
 |---|---|---|---|---|
-| 给演练故障注入打专用 label，Page 告警抑制演练期 | prevent | SRE | 下周 | TODO |
+| 给演练故障打 chaos label，Page 告警抑制演练期（✅ 已落地：Alertmanager `inhibit_rules` chaos=true 抑制 Page，见 `observability/alertmanager/alertmanager.yaml`） | prevent | SRE | 2026-08-21 | DONE |
 | 长窗口告警 Resolved 延迟评估，考虑增加恢复确认规则 | detect | SRE | 下周 | TODO |
 | 补充 NetworkChaos 场景的延迟 SLO 告警演练 | prevent | SRE | 两周 | TODO |

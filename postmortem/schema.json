@@ -1,0 +1,24 @@
+{
+  "title": "SRE Postmortem 校验规则（markdown 文档型 schema）",
+  "description": "postmortem/*.md 的必填章节与行动项闭环要求，由 deploy/scripts/validate-postmortem.py 校验。postmortem 不只是写文档，要 schema 校验 + 行动项跟踪到闭环。",
+  "required_sections": [
+    "事故概要",
+    "影响范围",
+    "根因",
+    "行动项"
+  ],
+  "required_fields_in_overview": [
+    "严重级别",
+    "影响 SLO",
+    "MTTD",
+    "MTTR",
+    "错误预算消耗"
+  ],
+  "action_items": {
+    "min_count": 1,
+    "required_columns": ["行动项", "类型", "Owner", "截止", "状态"],
+    "closure_required": "至少 1 个 DONE 或 IN-PROGRESS（禁止全 TODO 堆积，证明跟踪到闭环）",
+    "valid_statuses": ["TODO", "IN-PROGRESS", "DONE"]
+  },
+  "blameless": "无指责复盘：聚焦系统与流程改进，不追究个人责任"
+}

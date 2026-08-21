@@ -315,11 +315,30 @@ A('不是写代码，而是把 SRE 方法论端到端跑通并验证。难点：
   '② 在真实多节点集群解决镜像拉取（docker.io/ghcr.io/registry.k8s.io 三套加速 + 节点间搬运）；'
   '③ Chaos Mesh 2.7 与 containerd 的兼容性（socket path / scheduler 字段变更）。')
 Q('如果让你扩展，你会做什么？')
-A('① 接 Alertmanager + 飞书/钉钉通知，告警真正触达；② Prometheus 持久化用 Thanos + KS3 长期存储；'
-  '③ 引入金丝雀发布（Argo Rollouts）做变更管理；④ 用 K6 做更专业的压测；⑤ KS3 集成完整化（当前 Loki 用 emptyDir 待升级）。')
+A('① Prometheus 持久化用 Thanos + KS3 长期存储；② 引入金丝雀发布（Argo Rollouts）做变更管理；'
+  '③ 用 K6 做更专业的压测；④ Loki Ruler 日志告警接 Alertmanager 统一出口；'
+  '⑤ 告警驱动自愈，告警触发自动 restart/scale，形成检测→告警→自愈闭环。')
 Q('错误预算告警和普通阈值告警（如错误率>5%）有什么本质区别？')
 A('普通阈值告警凭经验拍阈值，与 SLO 脱节；错误预算告警从 SLO 推导，阈值有理论依据（14.4 = 1h 耗 2% 月预算），'
   '且多窗口天然分级（Page/Ticket/Budget 对应不同介入力度），避免告警疲劳。这是 SRE 与传统运维监控的本质差异。')
+Q('SLO 定义之后怎么持续运营？')
+A('三步闭环：① slo-spec.yaml 作为单一事实源声明 SLO 目标/SLI/告警阈值，'
+  'recording/alert rules 由 spec 派生，避免手写 26 条规则易错；② slo-report.py 周期查 Prometheus '
+  '生成 SLO 达成报告（SLI/错误预算剩余/燃烧率），主动回顾而非被动等告警；③ 不达标时按报告调整 SLO 目标或排期优化。')
+Q('toil（人工劳动）怎么量化和管理？')
+A('toil-log.py 记录每次手动干预（任务/耗时/可自动化），toil-report.py 聚合算成本（元/分钟）排自动化优先级。'
+  '本项目回填 5 条 toil 共 84min、可自动化 64min（76%）、可回收 160 元，ks3-integration-debug 45min 列 P0。'
+  'SRE 目标 toil < 50% 工时，超出即驱动自动化。')
+Q('postmortem 怎么保证不只是写文档？')
+A('① schema.json 定义必填章节（概要/影响/根因/行动项），validate-postmortem.py 校验；'
+  '② 行动项强制 ≥1 个 DONE/IN-PROGRESS，禁止全 TODO 堆积，证明跟踪到闭环；'
+  '③ blameless 无指责复盘。本次混沌演练 postmortem 的"打 chaos label 抑制告警"行动项已 DONE，'
+  '落地为 Alertmanager inhibit_rules。')
+Q('了解监控配置即代码（Monitoring as Code）吗？')
+A('Mixin 理念：SLI 定义、告警规则、Grafana dashboard、runbook 是同一 SLO 的四个视图，'
+  '应打包版本化、一起部署一起 review（Jsonnet 实现，如 sre-monitoring-as-code）。'
+  '本项目 slo-spec.yaml 是单一事实源，rules/dashboard/runbook 由 spec 派生对齐；'
+  'demo 手动对齐，生产可用自动生成工具彻底消除四者漂移。')
 
 doc.save(r'C:\Users\KC\Desktop\秋招\简历\简历\设计师修改\基于金山云平台的SRE可靠性工程平台-面经.docx')
 print('OK 面经已生成')

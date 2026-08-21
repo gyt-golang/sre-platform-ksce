@@ -1,0 +1,6 @@
+date,service,task,duration_min,automatable,notes
+2026-08-19,ordersvc,chaos-drill-manual-inject,8,yes,混沌演练手动注入50%故障观察燃烧率告警
+2026-08-19,ordersvc,manual-recovery-watch,6,yes,注入停止后手动观察burn_rate回落至告警resolved
+2026-08-19,ordersvc,log-grep,5,yes,kubectl logs手动排查ordersvc错误日志
+2026-08-21,ordersvc,ks3-integration-debug,45,yes,Loki接KS3调试4个bug(S3字段名/Promtail RBAC/__path__/provisioner)
+2026-08-21,ordersvc,alertmanager-deploy,20,no,Alertmanager部署+注入故障验证告警链路(脚本化但验证人工)

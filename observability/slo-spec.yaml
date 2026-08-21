@@ -1,0 +1,64 @@
+# SLO 单一事实源（Single Source of Truth）
+#
+# 所有 recording rules（error_ratio / burn_rate 多窗口）与 alert rules（Page/Ticket/Budget/Latency）
+# 均由本 spec 派生。prometheus.yaml 中的规则是本 spec 的等价手动实现（demo 对齐）；
+# 生产可用自动生成工具从本 spec 派生规则，避免手写 26 条规则易错。
+# 字段采用声明式 SLO spec 设计，SLO 目标/SLI/告警阈值集中定义，作为规则派生的唯一来源。
+#
+# 改 SLO 目标只改本文件（objective / SLI query / alerting 阈值），规则随之派生，
+# 避免"改一个目标要改 ConfigMap 里一串 expr"的坑。
+version: "prometheus/v1"
+service: "ordersvc"
+labels:
+  cluster: ksce
+  team: sre
+  repo: sre-platform-ksce
+
+slos:
+  # 可用性 SLO：99.9% 请求成功（5xx 视为错误）
+  - name: "availability-99.9"
+    objective: 99.9
+    description: "订单接口可用性，99.9% 请求非 5xx。允许错误预算 0.1%/月（≈43.2min/月）。"
+    sli:
+      events:
+        error_query: sum(rate(ordersvc_http_requests_total{status=~"5.."}[{{.window}}]))
+        total_query: sum(rate(ordersvc_http_requests_total[{{.window}}]))
+    alerting:
+      name: OrdersvcHighErrorRate
+      labels:
+        slo: availability-99.9
+        team: sre
+      # 多窗口多燃烧率告警，阈值与 prometheus.yaml 一致：
+      #   Page   (5m & 1h,  burn > 14.4) → 1h 耗 ≥2% 月预算，立即介入
+      #   Ticket (30m & 6h, burn > 6)    → 6h 耗 ~5% 月预算，建工单
+      #   Budget (1d,       burn > 1)    → 当前速率 30 天耗尽，排期优化
+      page_alert:
+        disable: false
+        labels:
+          severity: page
+      ticket_alert:
+        disable: false
+        labels:
+          severity: ticket
+
+  # 延迟 SLO：99% 请求 < 500ms
+  - name: "latency-p99-500ms"
+    objective: 99
+    description: "订单接口延迟，99% 请求 < 500ms。允许 1% 请求延迟违规/月。"
+    sli:
+      raw:
+        # 延迟违规率 = 1 - (≤500ms 请求占比)
+        error_ratio_query: |
+          1 - (
+            sum(rate(ordersvc_http_request_duration_seconds_bucket{le="0.5"}[{{.window}}]))
+            / sum(rate(ordersvc_http_request_duration_seconds_count[{{.window}}]))
+          )
+    alerting:
+      name: OrdersvcHighLatency
+      labels:
+        slo: latency-500ms
+        team: sre
+      ticket_alert:
+        disable: false
+        labels:
+          severity: ticket

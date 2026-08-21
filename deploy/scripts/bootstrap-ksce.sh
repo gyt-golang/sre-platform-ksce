@@ -61,10 +61,14 @@ kubectl -n sre-demo rollout status deployment/ordersvc --timeout=300s || true
 
 # 5. 可观测性三支柱（镜像走节点加速器拉取）
 log "部署可观测性栈（Prometheus / Grafana / Loki+Promtail / Jaeger+OTel）..."
-# Alertmanager：告警链路闭环（分组/抑制/飞书通知）。apply 前 sed 注入 __FEISHU_WEBHOOK__；
+# Alertmanager：告警链路闭环（分组/抑制/飞书通知 + remediator 分诊自愈）。
+# apply 前 sed 注入 __FEISHU_WEBHOOK__ 与 __REMEDIATOR_URL__；
 # 未配置 FEISHU_WEBHOOK 时默认本地 echo，Alertmanager 正常运行、UI 可见告警，仅通知发不出。
 FEISHU_WEBHOOK="${FEISHU_WEBHOOK:-http://127.0.0.1:9999/feishu}"
-sed "s|__FEISHU_WEBHOOK__|${FEISHU_WEBHOOK}|g" observability/alertmanager/alertmanager.yaml | kubectl apply -f -
+REMEDIATOR_URL="${REMEDIATOR_URL:-http://remediator.sre-demo:8080/webhook}"
+sed -e "s|__FEISHU_WEBHOOK__|${FEISHU_WEBHOOK}|g" \
+    -e "s|__REMEDIATOR_URL__|${REMEDIATOR_URL}|g" \
+    observability/alertmanager/alertmanager.yaml | kubectl apply -f -
 kubectl apply -f observability/prometheus/prometheus.yaml
 # prometheus 无 config-reloader sidecar，改 alerting 配置后重启读新 alertmanager targets
 kubectl -n observability rollout restart deployment/prometheus
@@ -107,6 +111,24 @@ MSYS_NO_PATHCONV=1 python deploy/scripts/ksce-remote.py exec \
    --set controllerManager.replicaCount=1 --version 2.7.0"
 log "部署混沌实验（PodChaos/NetworkChaos/StressChaos）..."
 kubectl apply -f chaos/experiments.yaml
+
+# 6.5 remediator：告警智能分诊+自动修复（Alertmanager webhook → 规则引擎自愈 + LLM 根因推断）
+# 构建 remediator 镜像（含 kubectl，rollout undo 用），apply RBAC + Deployment + Service。
+# LLM_API_KEY 从环境变量创建 Secret（绝不入库），remediator 通过 secretKeyRef 读取。
+log "部署 remediator（告警分诊+自动修复，规则引擎+LLM 根因推断）..."
+REMEDIATOR_IMG="${KECR}/${KECR_REPO}/remediator:v1"
+MSYS_NO_PATHCONV=1 python deploy/scripts/ksce-remote.py upload remediator /root/remediator
+MSYS_NO_PATHCONV=1 python deploy/scripts/ksce-remote.py exec \
+  "cd /root/remediator && docker build -t ${REMEDIATOR_IMG} . && \
+   echo '${KECR_PWD}' | docker login ${KECR} -u ${KECR_USER} --password-stdin && \
+   docker push ${REMEDIATOR_IMG}"
+# LLM API Key Secret（金山云大模型 glm-5.1，根因推断用）
+kubectl -n sre-demo delete secret llm-api-key --ignore-not-found=true
+kubectl -n sre-demo create secret generic llm-api-key \
+  --from-literal=apiKey="${LLM_API_KEY:-dummy-key-not-configured}"
+sed "s|__REMEDIATOR_IMG__|${REMEDIATOR_IMG}|g" deploy/manifests/remediator.yaml | kubectl apply -f -
+kubectl -n sre-demo rollout status deployment/remediator --timeout=180s || true
+log "remediator 已就绪（kubectl -n sre-demo get pod -l app=remediator 查状态）✓"
 
 # 7. 等待核心组件就绪
 log "等待 Pod 就绪（最长 6 分钟）..."

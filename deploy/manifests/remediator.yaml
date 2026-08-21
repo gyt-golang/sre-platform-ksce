@@ -1,0 +1,112 @@
+# remediator 部署：告警分诊+自动修复服务。
+# 镜像占位符 __REMEDIATOR_IMG__、LLM 凭证占位符 __LLM_API_KEY__ 由 bootstrap-ksce.sh sed 注入（绝不入库）。
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: remediator
+  namespace: sre-demo
+---
+# Role：scale deployment + rollout abort + 查 pod 日志（LLM 根因推断取上下文）。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: remediator
+  namespace: sre-demo
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    verbs: [get, patch, update]
+  - apiGroups: ["argoproj.io"]
+    resources: ["rollouts"]
+    verbs: [get, patch, list, watch]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: remediator
+  namespace: sre-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: remediator
+subjects:
+  - kind: ServiceAccount
+    name: remediator
+    namespace: sre-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remediator
+  namespace: sre-demo
+  labels: {app: remediator}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: remediator}
+  template:
+    metadata:
+      labels: {app: remediator}
+    spec:
+      serviceAccountName: remediator
+      containers:
+        - name: remediator
+          image: __REMEDIATOR_IMG__
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SERVICE
+              value: "ordersvc"
+            - name: DEPLOY_NAME
+              value: "ordersvc"
+            - name: NAMESPACE
+              value: "sre-demo"
+            - name: PROM_URL
+              value: "http://prometheus.observability.svc.cluster.local:9090"
+            - name: LOKI_URL
+              value: "http://loki.observability.svc.cluster.local:3100"
+            - name: LLM_API_URL
+              value: "https://kspmas.ksyun.com/v1"
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: llm-api-key
+                  key: apiKey
+            - name: LLM_MODEL
+              value: "glm-5.1"
+            - name: DRY_RUN
+              value: "false"   # 危险动作 rollout undo 已有 LLM 双确认护栏；可临时设 true 验证
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits: {cpu: 500m, memory: 256Mi}
+            requests: {cpu: 100m, memory: 128Mi}
+      imagePullSecrets:
+        - name: kecr-secret
+---
+# Service：ClusterIP，供 Alertmanager webhook 调用（不暴露公网）。
+apiVersion: v1
+kind: Service
+metadata:
+  name: remediator
+  namespace: sre-demo
+spec:
+  type: ClusterIP
+  selector: {app: remediator}
+  ports:
+    - {name: http, port: 8080, targetPort: http}

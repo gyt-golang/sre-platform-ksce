@@ -24,10 +24,23 @@ data:
         # info 级（混沌演练标记）不通知，仅留作 UI 可见
         - matchers: ['severity="info"']
           receiver: null-receiver
+        # page/ticket 级告警先送 remediator 分诊自愈（continue: true 再送飞书通知）
+        - matchers: ['severity="page"']
+          receiver: remediator-webhook
+          continue: true
+        - matchers: ['severity="ticket"']
+          receiver: remediator-webhook
+          continue: true
     receivers:
       - name: feishu-webhook
         webhook_configs:
           - url: __FEISHU_WEBHOOK__
+            send_resolved: true
+      # remediator：Alertmanager webhook 接收点，分诊+规则引擎自愈+LLM 根因推断。
+      # 占位符 __REMEDIATOR_URL__ 由 bootstrap-ksce.sh sed 注入（http://remediator.sre-demo:8080/webhook）。
+      - name: remediator-webhook
+        webhook_configs:
+          - url: __REMEDIATOR_URL__
             send_resolved: true
       - name: null-receiver
     inhibit_rules:

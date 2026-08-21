@@ -6,9 +6,10 @@ ENV GOPROXY=https://goproxy.cn,direct
 COPY go.mod ./
 RUN go mod download
 COPY . .
-# 静态编译，CGO_DISABLE 便于在 alpine/scratch 运行；注入构建版本。
+# 静态编译，CGO_DISABLE 便于在 alpine/scratch 运行；注入构建版本与 buggy 标志。
 ARG VERSION=sre-demo
-RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.buildVersion=${VERSION}" \
+ARG BUGGY=false
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.buildVersion=${VERSION} -X github.com/sre-demo/ordersvc/internal/handler.buggy=${BUGGY}" \
     -o /out/ordersvc ./cmd/server
 
 FROM alpine:3.20

@@ -1,0 +1,152 @@
+# 金丝雀发布 + 自动回滚（Argo Rollouts）
+#
+# 把 ordersvc 从原生 Deployment 升级为 Rollout，实现渐进式交付：
+#   - 金丝雀策略：20% → 40% → 60% → 100% 流量逐步切到新版本，每步 pause 等指标
+#   - AnalysisTemplate：每步查 Prometheus SLO 指标（错误率/延迟），超阈值自动回滚
+#   - 复用现有 Service（Argo Rollouts 通过 Service selector + ReplicaSet 实现流量切分）
+#
+# 基于 SLO 指标自动回滚是"SRE 变更安全"核心实践：
+#   变更（发布）是 80% 故障的来源，金丝雀让故障影响范围可控（只波及部分流量），
+#   AnalysisTemplate 把"发布是否健康"的判断从人肉看大盘，变成指标驱动的自动决策。
+#
+# 用法：
+#   1. kubectl apply -f deploy/manifests/rollout-ordersvc.yaml   # 首次部署（v1）
+#   2. 推 v2 镜像后改 image tag，kubectl apply 触发金丝雀
+#   3. bash deploy/scripts/canary-deploy.sh <new_tag>           # 脚本化触发+观察
+#
+# 注意：Rollout 与同名 Deployment 互斥。切换前需先删除原 Deployment
+# （kubectl -n sre-demo delete deployment ordersvc），由 Rollout 接管。
+---
+# AnalysisTemplate：金丝雀健康分析，查 Prometheus SLO 指标。
+# 任一指标超阈值 → analysis 失败 → Rollout 自动回滚到上一个稳定版本。
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: ordersvc-canary-analysis
+  namespace: sre-demo
+spec:
+  args:
+    # 传入 service-name，便于多 Rollout 复用（本项目固定 ordersvc）
+    - name: service-name
+      value: ordersvc
+  metrics:
+    # 指标1：错误率 5m 窗口。阈值 5%——金丝雀阶段允许比 SLO(0.1%) 稍宽，
+    # 因为新版本刚切流样本少，5% 是"明显有问题"的硬阈值，触发即回滚。
+    - name: error-rate
+      interval: 30s
+      count: 5           # 采 5 次（约 2.5 分钟观察窗）
+      # result 是 []float64，需先判非空再取首元素；PromQL 末尾 or vector(0) 保证无流量时也有值不越界
+      # 注意 label 名是 code（见 metrics.go 的 HTTPRequestsTotal 定义），不是 status，否则匹配空 series 永远返回 0
+      successCondition: len(result) > 0 && result[0] <= 0.05
+      failureLimit: 2    # 连续 2 次超阈值即判定失败→回滚
+      provider:
+        prometheus:
+          address: http://prometheus.observability.svc.cluster.local:9090
+          query: |
+            (sum(rate(ordersvc_http_requests_total{path="/order",code=~"5.."}[5m]))
+            / sum(rate(ordersvc_http_requests_total{path="/order"}[5m]))) or vector(0)
+    # 指标2：P99 延迟。阈值 800ms——比 SLO(500ms) 宽，金丝雀期允许稍慢，明显劣化才回滚。
+    - name: p99-latency
+      interval: 30s
+      count: 5
+      successCondition: len(result) > 0 && result[0] <= 0.8
+      failureLimit: 2
+      provider:
+        prometheus:
+          address: http://prometheus.observability.svc.cluster.local:9090
+          query: |
+            (histogram_quantile(0.99,
+              sum by (le) (rate(ordersvc_http_request_duration_seconds_bucket{path="/order"}[5m])))) or vector(0)
+---
+# Rollout：替代 Deployment，金丝雀策略 + 每步 Analysis
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: ordersvc
+  namespace: sre-demo
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: ordersvc
+  # 关键：Rollout 通过 stable/canary 两个 ReplicaSet + 副本比例实现流量切分
+  # （20% 权重 = canary RS 副本数占比，靠 Service selector 路由）
+  strategy:
+    canary:
+      canaryService: ordersvc-canary      # 金丝雀流量 Service（指向新版本 RS）
+      stableService: ordersvc-stable      # 稳定流量 Service（指向旧版本 RS）
+      steps:
+        - setWeight: 20                   # 第1步：20% 流量到 v2
+        - analysis:                       # 跑分析，超阈值回滚
+            templates:
+              - templateName: ordersvc-canary-analysis
+        - setWeight: 40                   # 第2步：40%
+        - analysis:
+            templates:
+              - templateName: ordersvc-canary-analysis
+        - setWeight: 60                   # 第3步：60%
+        - analysis:
+            templates:
+              - templateName: ordersvc-canary-analysis
+        - setWeight: 100                  # 第4步：全量，v2 成为新 stable
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: ordersvc
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: ordersvc
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: ordersvc
+          # 镜像 tag 由 canary-deploy.sh 触发更新（首次 apply 用 ksce-v1）
+          image: hub.kce.ksyun.com/czmtest/gyt_test/ordersvc:ksce-v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: metrics, containerPort: 9090}
+          env:
+            - {name: VERSION, value: "ksce-v1"}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            failureThreshold: 12
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+---
+# 金丝雀流量 Service（指向 canary ReplicaSet，Argo Rollouts 自动维护 selector）
+apiVersion: v1
+kind: Service
+metadata:
+  name: ordersvc-canary
+  namespace: sre-demo
+spec:
+  type: ClusterIP
+  selector: {app: ordersvc}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+# 稳定流量 Service（指向 stable ReplicaSet）
+apiVersion: v1
+kind: Service
+metadata:
+  name: ordersvc-stable
+  namespace: sre-demo
+spec:
+  type: ClusterIP
+  selector: {app: ordersvc}
+  ports: [{name: http, port: 8080, targetPort: http}]

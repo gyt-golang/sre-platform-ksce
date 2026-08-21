@@ -16,6 +16,9 @@ import (
 	"github.com/sre-demo/ordersvc/internal/metrics"
 )
 
+// buggy 由 ldflags 注入（-X handler.buggy=true），用于构建会 50% 500 的 v3 版本验证金丝雀自动回滚。
+var buggy = "false"
+
 // Handler 聚合订单服务的全部 HTTP 路由与业务逻辑。
 type Handler struct {
 	metrics *metrics.OrderServiceMetrics
@@ -96,6 +99,14 @@ func (h *Handler) readyz(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) createOrder(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	// BUGGY 版本：编译期注入 50% 500 错误，用于演示金丝雀自动回滚（Analysis 检测错误率超阈值）。
+	// 正式版本不编译此 flag。
+	if buggy == "true" && rand.Float64() < 0.5 {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "buggy-version-500"})
 		return
 	}
 

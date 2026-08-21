@@ -76,6 +76,28 @@ kubectl apply -f observability/jaeger/jaeger.yaml
 # PrometheusRule CRD（需 Prometheus Operator，裸 Prometheus 用 ConfigMap 版规则，容错跳过）
 kubectl apply -f observability/prometheus/prometheus-rule-slo.yaml 2>/dev/null || true
 
+# 5.5 SLO Operator（自研 K8s Operator，把 slo-spec 做成 CRD，reconcile 派生 Prometheus 规则）
+# 构建 slo-operator 镜像（master01 远程 docker build/push KECR），apply CRD + RBAC + Deployment + SLO CR。
+# SLO CR apply 后 Operator reconcile 覆盖 observability/prometheus-rules ConfigMap（裸 Prometheus rules volume），
+# 派生 5 窗口 recording + 3 档 alert，并修复 status→code bug。
+log "部署 SLO Operator（CRD + controller + SLO CR）..."
+SLO_OP_IMG="${KECR}/${KECR_REPO}/slo-operator:v1"
+MSYS_NO_PATHCONV=1 python deploy/scripts/ksce-remote.py upload operator /root/slo-operator
+MSYS_NO_PATHCONV=1 python deploy/scripts/ksce-remote.py exec \
+  "cd /root/slo-operator && docker build -t ${SLO_OP_IMG} . && \
+   echo '${KECR_PWD}' | docker login ${KECR} -u ${KECR_USER} --password-stdin && \
+   docker push ${SLO_OP_IMG}"
+kubectl apply -f deploy/manifests/slo-operator-crd.yaml
+kubectl -n sre-demo wait crd/slos.slo.sre-demo.io --for=condition=established --timeout=60s || true
+sed "s|__SLO_OP_IMG__|${SLO_OP_IMG}|g" deploy/manifests/slo-operator-deployment.yaml | kubectl apply -f -
+kubectl -n sre-demo rollout status deployment/slo-operator --timeout=180s || true
+# SLO CR：apply 后 controller 派生规则覆盖 prometheus-rules ConfigMap
+kubectl apply -f deploy/manifests/slo-cr-ordersvc.yaml
+# 等 controller reconcile 完成（ConfigMap 被覆盖），reload prometheus 加载新规则
+sleep 5
+kubectl -n observability rollout restart deployment/prometheus
+log "SLO Operator 已派生规则（kubectl -n sre-demo get slo ordersvc 查 status）✓"
+
 # 6. Chaos Mesh（helm，runtime=containerd，镜像在 ghcr.io 走加速；加速慢时可手动搬运镜像）
 log "部署 Chaos Mesh..."
 MSYS_NO_PATHCONV=1 python deploy/scripts/ksce-remote.py exec \

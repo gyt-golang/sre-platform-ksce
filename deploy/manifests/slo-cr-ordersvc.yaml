@@ -1,0 +1,64 @@
+# SLO CR 实例 —— ordersvc 的 SLO 规则单一事实源。
+# apply 后 SLO Operator 派生：
+#   - recording rules: ordersvc:{request_rate,error_rate,error_ratio,burn_rate}{5m,30m,1h,6h,1d} + latency_p99_5m
+#   - alert rules: OrdersvcHighErrorRatePage/Ticket、OrdersvcErrorBudgetExhausting、OrdersvcHighLatencyP99Ticket
+# 双写 PrometheusRule CRD + ConfigMap(ordersvc-slo-rules)，裸 Prometheus 加载后者。
+#
+# 与原 observability/prometheus/prometheus.yaml 手写规则等价，但修复 status→code bug
+# （metrics.go HTTPRequestsTotal label 是 code，slo-spec.yaml 误写 status=~"5.." 导致永不匹配）。
+---
+apiVersion: slo.sre-demo.io/v1
+kind: SLO
+metadata:
+  name: ordersvc
+  namespace: sre-demo
+spec:
+  version: prometheus/v1
+  service: ordersvc
+  labels:
+    cluster: ksce
+    team: sre
+  slos:
+    - name: availability-99.9
+      objective: 99.9
+      description: 订单服务可用性，30 天窗口月错误预算约 43 分钟。
+      sli:
+        events:
+          # 错误事件：5xx 响应。label 用 code（metrics.go HTTPRequestsTotal），禁 status。
+          error_query: |
+            sum(rate(ordersvc_http_requests_total{path="/order",code=~"5.."}[{{.window}}]))
+          total_query: |
+            sum(rate(ordersvc_http_requests_total{path="/order"}[{{.window}}]))
+      alerting:
+        name: OrdersvcHighErrorRate
+        labels: {slo: availability-99.9, team: sre}
+        page_alert:
+          labels: {severity: page}
+          burnThreshold: 14.4   # 1h 消耗 2% 月预算
+          windows: ["5m", "1h"]
+          for: 2m
+        ticket_alert:
+          labels: {severity: ticket}
+          burnThreshold: 6
+          windows: ["30m", "6h"]
+          for: 15m
+    - name: latency-p99-500ms
+      objective: 99.9
+      description: 订单创建 P99 延迟 ≤ 500ms（30 天窗口）。
+      sli:
+        raw:
+          # error_ratio = 1 - (≤500ms bucket / count)，即超 500ms 请求占比。
+          error_ratio_query: |
+            1 - (
+              sum(rate(ordersvc_http_request_duration_seconds_bucket{path="/order",le="0.5"}[{{.window}}]))
+              / sum(rate(ordersvc_http_request_duration_seconds_count{path="/order"}[{{.window}}]))
+            )
+      alerting:
+        name: OrdersvcHighLatency
+        labels: {slo: latency-500ms, team: sre}
+        ticket_alert:
+          labels: {severity: ticket}
+          # 延迟 SLO 用 raw error_ratio，无燃烧率概念，threshold 设为 0.01（1% 请求超 500ms）。
+          burnThreshold: 0.01
+          windows: ["5m"]
+          for: 5m

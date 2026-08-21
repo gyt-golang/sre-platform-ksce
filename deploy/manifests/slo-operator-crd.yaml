@@ -1,0 +1,154 @@
+# SLO CRD —— SLO 规则的单一事实源，由 SLO Operator reconcile 派生 Prometheus 规则。
+# 手写等价 controller-gen make manifests 产出。group=slo.sre-demo.io version=v1 kind=SLO。
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: slos.slo.sre-demo.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.2
+spec:
+  group: slo.sre-demo.io
+  names:
+    kind: SLO
+    listKind: SLOList
+    plural: slos
+    singular: slo
+    shortNames: [slo]
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: SLO 是 SLO 规则的 CRD 实例，由 SLO Operator reconcile 派生 Prometheus recording/alert rules。
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required: [version, service, slos]
+              properties:
+                version:
+                  type: string
+                  description: SLO spec 格式版本，固定 "prometheus/v1"。
+                service:
+                  type: string
+                  description: 目标服务名，作为派生 recording rule 名前缀。
+                labels:
+                  type: object
+                  additionalProperties: {type: string}
+                  description: 全局 labels，合并进所有派生 alert。
+                slos:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [name, objective, sli, alerting]
+                    properties:
+                      name:
+                        type: string
+                        description: SLO 标识，作为 alert 的 slo label 值。
+                      objective:
+                        type: number
+                        description: SLO 目标百分比 0-100。
+                      description:
+                        type: string
+                      sli:
+                        type: object
+                        properties:
+                          events:
+                            type: object
+                            required: [error_query, total_query]
+                            properties:
+                              error_query:
+                                type: string
+                                description: 错误事件 query，必须用 code= label（metrics.go HTTPRequestsTotal），含 {{.window}} 占位符。
+                              total_query:
+                                type: string
+                                description: 总事件 query，含 {{.window}} 占位符。
+                          raw:
+                            type: object
+                            required: [error_ratio_query]
+                            properties:
+                              error_ratio_query:
+                                type: string
+                                description: 直接给出 error_ratio query，含 {{.window}} 占位符。
+                      alerting:
+                        type: object
+                        required: [name]
+                        properties:
+                          name:
+                            type: string
+                            description: 告警名前缀（如 OrdersvcHighErrorRate），controller 拼接 Page/Ticket 后缀。
+                          labels:
+                            type: object
+                            additionalProperties: {type: string}
+                          page_alert:
+                            type: object
+                            properties:
+                              disable: {type: boolean}
+                              labels:
+                                type: object
+                                additionalProperties: {type: string}
+                              burnThreshold:
+                                type: number
+                                description: 多窗口燃烧率阈值，默认 14.4。
+                              windows:
+                                type: array
+                                items: {type: string}
+                                description: 多窗口组合，默认 ["5m","1h"]。
+                              for:
+                                type: string
+                                description: 持续时间，默认 "2m"。
+                          ticket_alert:
+                            type: object
+                            properties:
+                              disable: {type: boolean}
+                              labels:
+                                type: object
+                                additionalProperties: {type: string}
+                              burnThreshold:
+                                type: number
+                                description: 燃烧率阈值，默认 6。
+                              windows:
+                                type: array
+                                items: {type: string}
+                              for:
+                                type: string
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type: {type: string}
+                      status: {type: string}
+                      reason: {type: string}
+                      message: {type: string}
+                      lastTransitionTime: {type: string, format: date-time}
+                generatedRules:
+                  type: array
+                  items: {type: string}
+                lastReconcileAt:
+                  type: string
+                  format: date-time
+                prometheusRuleName: {type: string}
+                configMapName: {type: string}
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Service
+          type: string
+          jsonPath: .spec.service
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

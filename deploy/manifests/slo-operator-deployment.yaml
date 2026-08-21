@@ -1,0 +1,86 @@
+# SLO Operator 部署：ServiceAccount + RBAC + Deployment。
+# 镜像占位符 __SLO_OP_IMG__ 由 bootstrap-ksce.sh sed 注入（hub.kce.ksyun.com/czmtest/gyt_test/slo-operator:v1）。
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: slo-operator
+  namespace: sre-demo
+---
+# ClusterRole：需跨 ns 写 observability 的 ConfigMap（prometheus-rules，裸 Prometheus rules volume）。
+# SLO CR 在 sre-demo，派生规则 ConfigMap 写到 observability ns，故用 ClusterRole。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: slo-operator
+rules:
+  - apiGroups: ["slo.sre-demo.io"]
+    resources: ["slos"]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["slo.sre-demo.io"]
+    resources: ["slos/status", "slos/finalizers"]
+    verbs: [get, update, patch]
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["prometheusrules"]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: slo-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: slo-operator
+subjects:
+  - kind: ServiceAccount
+    name: slo-operator
+    namespace: sre-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slo-operator
+  namespace: sre-demo
+  labels: {app: slo-operator}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: slo-operator}
+  template:
+    metadata:
+      labels: {app: slo-operator}
+    spec:
+      serviceAccountName: slo-operator
+      containers:
+        - name: manager
+          image: __SLO_OP_IMG__
+          imagePullPolicy: IfNotPresent
+          args: ["--metrics-bind-address=:8080"]
+          env:
+            - name: ENABLE_WEBHOOK
+              value: "false"   # demo 免证书管理；生产开 true 需配 webhook Service + cert
+          ports:
+            - name: metrics
+              containerPort: 8080
+            - name: health
+              containerPort: 8081
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits: {cpu: 500m, memory: 256Mi}
+            requests: {cpu: 100m, memory: 128Mi}
+      imagePullSecrets:
+        - name: kecr-secret

@@ -212,7 +212,15 @@ BULLET('livenessProbe：进程死锁/崩溃自动重启容器。', '• ')
 BULLET('readinessProbe：未就绪自动从 Service Endpoints 摘除，流量不打进不健康实例。', '• ')
 BULLET('HPA：基于 CPU/自定义指标自动扩缩容，应对流量激增。', '• ')
 
-H2('4.6 SRE 运营闭环（持续改进）')
+H2('4.6 变更安全：金丝雀发布与自动回滚（Argo Rollouts）')
+P('变更是 80% 故障的来源。用 Argo Rollouts 把 ordersvc 从原生 Deployment 升级为 Rollout，'
+  '实现渐进式交付 + SLO 驱动自动回滚，把"发布是否健康"从人肉看大盘变成指标驱动的自动决策：')
+BULLET('金丝雀策略：20% → 40% → 60% → 100% 流量逐步切到新版本，每步 pause 跑 AnalysisTemplate，故障被限制在 20% 流量内。', '• ')
+BULLET('AnalysisTemplate 指标驱动：每步查 Prometheus 错误率（≤5%）与 P99 延迟（≤800ms），超阈值自动 abort 回滚到上一个 stable ReplicaSet——判断依据是 SLO 指标而非 Pod Ready。', '• ')
+BULLET('版本区分：Dockerfile 加 BUGGY ARG + ldflags 注入，handler.go 在 buggy=true 时 50% 返回 500，构建 v3-bad 坏版本验证回滚；正式版本不编译此 flag。', '• ')
+BULLET('canary-deploy.sh 脚本化：远程构建推 KECR + patch image 触发金丝雀 + 观察进度。', '• ')
+
+H2('4.7 SRE 运营闭环（持续改进）')
 P('让稳定性"可运营"而非一次性定义，覆盖持续改进的全链路：')
 H3('SLO 周期报告')
 P('slo-report.py 查询 Prometheus recording rules，生成月度 SLO 达成报告（SLI / 错误预算剩余 / 燃烧率趋势 / 调整建议），'
@@ -246,6 +254,7 @@ table(
         ['Toil 量化', '回填 5 条手动干预', '总 84min，可自动化 76%，可回收成本 160 元'],
         ['Postmortem 闭环', 'validate-postmortem.py 校验', '章节齐全 + 行动项 ≥1 DONE，闭环通过'],
         ['SLO 达成报告', 'slo-report.py 查 Prom', '生成月度报告：SLI/错误预算剩余/燃烧率趋势/调整建议'],
+        ['金丝雀自动回滚', '发 v3-bad(50% 500) + loadgen 打 canary', '错误率升至 0.33，AnalysisRun Failed，v3-bad RS 缩 0，自动回滚 v2 恢复 Healthy'],
     ]
 )
 
@@ -255,6 +264,7 @@ BULLET('可观测性三支柱：Prometheus/Loki(+KS3)/Jaeger 全覆盖。', '✓
 BULLET('告警链路闭环：Alertmanager 分组/抑制/触达 + runbook enrichment。', '✓ ')
 BULLET('混沌工程：Chaos Mesh 三类实验主动验证韧性。', '✓ ')
 BULLET('故障自愈：HPA + 双探针，被动自愈。', '✓ ')
+BULLET('变更安全：Argo Rollouts 金丝雀 + AnalysisTemplate SLO 驱动自动回滚。', '✓ ')
 BULLET('运营闭环：SLO 周期报告 + Toil 量化 + Postmortem 闭环，持续改进。', '✓ ')
 BULLET('云原生落地：金山云 KEC + KECR + KS3 三层云产品真实接入。', '✓ ')
 

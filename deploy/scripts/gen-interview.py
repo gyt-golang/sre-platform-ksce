@@ -303,6 +303,16 @@ A('无 finalizer 但容器停止 hang（privileged 进程不响应），旧 Pod 
 Q('注入故障后告警一直 pending 不 firing？')
 A('Page 告警有 for:2m 条件——双窗口燃烧率超阈值后需持续 2 分钟才转 firing（防抖）。'
   'pending 是正常中间态。本项目实测注入 50% 故障约 2 分钟后转 firing。')
+Q('金丝雀发布坏版本却没自动回滚，怎么定位的？')
+A('现象：发了会 50% 返回 500 的 v3-bad，金丝雀一路推进到 100% 成了 stable，AnalysisRun 全 Successful。'
+  '定位两步：① exec 进 v3-bad pod 直接 curl /order，10 次 8 次 500，buggy 标志经 ldflags 注入确实生效，问题不在镜像；'
+  '② 去 Prometheus 手动跑 AnalysisTemplate 里的错误率 PromQL，结果恒为 0。'
+  '根因：指标 ordersvc_http_requests_total 的状态码 label 名是 code（见 metrics.go），'
+  '但 PromQL 写的是 status=~"5.."，label 对不上匹配到空 series，叠加查询末尾 or vector(0) 兜底返回 0，'
+  '错误率永远 0，Analysis 永远 success，永不回滚。'
+  '修复：PromQL 改 code=~"5.."，重测错误率立刻读到 0.33，AnalysisRun 转 Failed，自动回滚到 v2。'
+  '教训：canary 健康分析的 PromQL 必须和指标 label 名逐字核对，先手动验证查询有值再放进 AnalysisTemplate；'
+  'or vector(0) 是双刃剑，会掩盖"label 写错查不到数据"的真实故障；"分析一直成功"本身就是可疑信号。')
 Q('项目最大的收获是什么？')
 A('① 把 SRE 方法论从书本落到真实云环境，可量化可验证；'
   '② 踩了大量真实坑（镜像加速/RBAC/Chaos Mesh 兼容性），积累实战排障经验；'
@@ -315,9 +325,10 @@ A('不是写代码，而是把 SRE 方法论端到端跑通并验证。难点：
   '② 在真实多节点集群解决镜像拉取（docker.io/ghcr.io/registry.k8s.io 三套加速 + 节点间搬运）；'
   '③ Chaos Mesh 2.7 与 containerd 的兼容性（socket path / scheduler 字段变更）。')
 Q('如果让你扩展，你会做什么？')
-A('① Prometheus 持久化用 Thanos + KS3 长期存储；② 引入金丝雀发布（Argo Rollouts）做变更管理；'
-  '③ 用 K6 做更专业的压测；④ Loki Ruler 日志告警接 Alertmanager 统一出口；'
-  '⑤ 告警驱动自愈，告警触发自动 restart/scale，形成检测→告警→自愈闭环。')
+A('① Prometheus 持久化用 Thanos + KS3 长期存储；② 金丝雀发布已落地（Argo Rollouts + AnalysisTemplate '
+  '查 SLO 指标自动回滚，实测坏版本 33% 错误率触发回滚）；③ 用 K6 做更专业的压测；'
+  '④ Loki Ruler 日志告警接 Alertmanager 统一出口；⑤ 告警驱动自愈，告警触发自动 restart/scale，'
+  '形成检测→告警→自愈闭环；⑥ 多集群多可用区容灾。')
 Q('错误预算告警和普通阈值告警（如错误率>5%）有什么本质区别？')
 A('普通阈值告警凭经验拍阈值，与 SLO 脱节；错误预算告警从 SLO 推导，阈值有理论依据（14.4 = 1h 耗 2% 月预算），'
   '且多窗口天然分级（Page/Ticket/Budget 对应不同介入力度），避免告警疲劳。这是 SRE 与传统运维监控的本质差异。')

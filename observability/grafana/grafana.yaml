@@ -1,0 +1,236 @@
+# 可观测性 —— 可视化支柱：Grafana
+# 通过 provisioning 自动注入 datasource（Prometheus/Loki）与 SLO 大盘，免手动配置。
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: observability
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        jsonData:
+          timeInterval: "15s"
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki:3100
+        jsonData:
+          maxLines: 1000
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-providers
+  namespace: observability
+data:
+  providers.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'sre-dashboards'
+        orgId: 1
+        folder: 'SRE'
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+---
+# SLO 大盘 JSON：错误预算燃烧率、可用性、延迟 P99、QPS、错误率、在途订单。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-slo
+  namespace: observability
+data:
+  ordersvc-slo.json: |
+    {
+      "title": "ordersvc SRE SLO Overview",
+      "uid": "ordersvc-sre-slo",
+      "schemaVersion": 39,
+      "time": {"from": "now-1h", "to": "now"},
+      "tags": ["sre", "slo", "ordersvc"],
+      "templating": {
+        "list": [
+          {"name": "path", "type": "query", "datasource": {"type": "prometheus"},
+           "query": "label_values(ordersvc_http_requests_total, path)", "refresh": 1,
+           "multi": false, "includeAll": false,
+           "current": {"text": "/order", "value": "/order"},
+           "options": [{"text": "/order", "value": "/order", "selected": true}]}
+        ]
+      },
+      "panels": [
+        {
+          "title": "可用性 SLI（成功率）",
+          "type": "stat", "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0},
+          "targets": [{"expr": "1 - ordersvc:error_ratio5m{path=\"$path\"}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "percentunit", "thresholds": {"mode": "absolute",
+            "steps": [{"color": "red"}, {"color": "yellow", "value": 0.99}, {"color": "green", "value": 0.999}]}}}
+        },
+        {
+          "title": "错误预算燃烧率",
+          "type": "timeseries", "gridPos": {"h": 6, "w": 12, "x": 6, "y": 0},
+          "targets": [
+            {"expr": "ordersvc:burn_rate5m{path=\"$path\"}", "legendFormat": "5m", "refId": "A"},
+            {"expr": "ordersvc:burn_rate1h{path=\"$path\"}", "legendFormat": "1h", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"custom": {"drawStyle": "line"}}},
+          "thresholds": [{"value": 14.4, "color": "red"}, {"value": 6, "color": "yellow"}, {"value": 1, "color": "blue"}]
+        },
+        {
+          "title": "P99 延迟 (SLO 500ms)",
+          "type": "timeseries", "gridPos": {"h": 6, "w": 6, "x": 18, "y": 0},
+          "targets": [{"expr": "ordersvc:latency_p99_5m{path=\"$path\"}", "legendFormat": "p99", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute",
+            "steps": [{"color": "green"}, {"color": "red", "value": 0.5}]}}}
+        },
+        {
+          "title": "QPS",
+          "type": "timeseries", "gridPos": {"h": 7, "w": 8, "x": 0, "y": 6},
+          "targets": [{"expr": "ordersvc:request_rate5m{path=\"$path\"}", "legendFormat": "{{path}}", "refId": "A"}]
+        },
+        {
+          "title": "错误率（5xx）",
+          "type": "timeseries", "gridPos": {"h": 7, "w": 8, "x": 8, "y": 6},
+          "targets": [{"expr": "ordersvc:error_ratio5m{path=\"$path\"}", "legendFormat": "err ratio", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "percentunit"}}
+        },
+        {
+          "title": "在途订单 / HPA 触发指标",
+          "type": "timeseries", "gridPos": {"h": 7, "w": 8, "x": 16, "y": 6},
+          "targets": [{"expr": "ordersvc_orders_in_flight", "legendFormat": "in-flight", "refId": "A"}]
+        },
+        {
+          "title": "注入故障强度（混沌演练）",
+          "type": "stat", "gridPos": {"h": 6, "w": 24, "x": 0, "y": 13},
+          "targets": [
+            {"expr": "ordersvc_failure_rate_injected", "legendFormat": "fail rate", "refId": "A"},
+            {"expr": "ordersvc_latency_injected_ms", "legendFormat": "latency ms", "refId": "B"}
+          ]
+        },
+        {
+          "title": "错误预算剩余（30天窗口，目标99.9%）",
+          "type": "gauge", "gridPos": {"h": 7, "w": 6, "x": 0, "y": 19},
+          "targets": [{"expr": "1 - ordersvc:error_ratio1d{path=\"$path\"}", "legendFormat": "budget left", "refId": "A"}],
+          "fieldConfig": {"defaults": {"min": 0, "max": 1, "unit": "percentunit",
+            "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "yellow", "value": 0.5}, {"color": "green", "value": 0.9}]}}}
+        },
+        {
+          "title": "延迟分位 P50/P90/P99/P999",
+          "type": "timeseries", "gridPos": {"h": 7, "w": 9, "x": 6, "y": 19},
+          "targets": [
+            {"expr": "histogram_quantile(0.5, sum by (le, path) (rate(ordersvc_http_request_duration_seconds_bucket{path=\"$path\"}[5m])))", "legendFormat": "p50", "refId": "A"},
+            {"expr": "histogram_quantile(0.9, sum by (le, path) (rate(ordersvc_http_request_duration_seconds_bucket{path=\"$path\"}[5m])))", "legendFormat": "p90", "refId": "B"},
+            {"expr": "histogram_quantile(0.99, sum by (le, path) (rate(ordersvc_http_request_duration_seconds_bucket{path=\"$path\"}[5m])))", "legendFormat": "p99", "refId": "C"},
+            {"expr": "histogram_quantile(0.999, sum by (le, path) (rate(ordersvc_http_request_duration_seconds_bucket{path=\"$path\"}[5m])))", "legendFormat": "p999", "refId": "D"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 0.5}]}}}
+        },
+        {
+          "title": "请求计数 成功 vs 失败（rate）",
+          "type": "timeseries", "gridPos": {"h": 7, "w": 9, "x": 15, "y": 19},
+          "targets": [
+            {"expr": "sum(rate(ordersvc_http_requests_total{path=\"$path\",code!~\"5..\"}[5m]))", "legendFormat": "2xx/4xx 成功", "refId": "A"},
+            {"expr": "sum(rate(ordersvc_http_requests_total{path=\"$path\",code=~\"5..\"}[5m]))", "legendFormat": "5xx 失败", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "reqps"}}
+        },
+        {
+          "title": "订单创建 / 失败计数（rate）",
+          "type": "timeseries", "gridPos": {"h": 7, "w": 8, "x": 0, "y": 26},
+          "targets": [
+            {"expr": "sum(rate(ordersvc_orders_created_total[5m]))", "legendFormat": "created/s", "refId": "A"},
+            {"expr": "sum(rate(ordersvc_orders_failed_total[5m]))", "legendFormat": "failed/s", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "ops"}}
+        },
+        {
+          "title": "QPS vs 错误率（关联）",
+          "type": "timeseries", "gridPos": {"h": 7, "w": 8, "x": 8, "y": 26},
+          "targets": [
+            {"expr": "ordersvc:request_rate5m{path=\"$path\"}", "legendFormat": "QPS", "refId": "A"},
+            {"expr": "ordersvc:error_ratio5m{path=\"$path\"} * 100", "legendFormat": "err% ", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"custom": {"axisLabel": ""}}}
+        },
+        {
+          "title": "Pod 副本数 / Ready（自愈可视化）",
+          "type": "timeseries", "gridPos": {"h": 7, "w": 8, "x": 16, "y": 26},
+          "targets": [
+            {"expr": "count(up{job=\"kubernetes-pods\",pod=~\"ordersvc-.*\"} == 1)", "legendFormat": "running (up=1)", "refId": "A"},
+            {"expr": "count(up{job=\"kubernetes-pods\",pod=~\"ordersvc-.*\"})", "legendFormat": "discovered", "refId": "B"}
+          ],
+          "fieldConfig": {"defaults": {"decimals": 0}}
+        },
+        {
+          "title": "错误预算消耗速率（1d burn rate）",
+          "type": "stat", "gridPos": {"h": 6, "w": 8, "x": 0, "y": 33},
+          "targets": [{"expr": "ordersvc:burn_rate1d{path=\"$path\"}", "legendFormat": "1d burn", "refId": "A"}],
+          "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute",
+            "steps": [{"color": "green"}, {"color": "yellow", "value": 1}, {"color": "red", "value": 6}]}}}
+        },
+        {
+          "title": "可用性 SLI（1h 窗口）",
+          "type": "stat", "gridPos": {"h": 6, "w": 8, "x": 8, "y": 33},
+          "targets": [{"expr": "1 - ordersvc:error_ratio1h{path=\"$path\"}", "refId": "A"}],
+          "fieldConfig": {"defaults": {"unit": "percentunit", "thresholds": {"mode": "absolute",
+            "steps": [{"color": "red"}, {"color": "yellow", "value": 0.99}, {"color": "green", "value": 0.999}]}}}
+        },
+        {
+          "title": "服务版本（build_info）",
+          "type": "stat", "gridPos": {"h": 6, "w": 8, "x": 16, "y": 33},
+          "targets": [{"expr": "ordersvc_build_info", "legendFormat": "{{version}}", "refId": "A"}]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: observability
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: grafana}}
+  template:
+    metadata: {labels: {app: grafana}}
+    spec:
+      securityContext: {fsGroup: 472}
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.2.0
+          env:
+            - {name: GF_SECURITY_ADMIN_PASSWORD, value: "admin"}
+            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "true"}
+            - {name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: "Admin"}
+          ports: [{containerPort: 3000}]
+          volumeMounts:
+            - {name: datasources, mountPath: /etc/grafana/provisioning/datasources}
+            - {name: dashboard-providers, mountPath: /etc/grafana/provisioning/dashboards}
+            - {name: dashboards, mountPath: /var/lib/grafana/dashboards}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+      volumes:
+        - name: datasources
+          configMap: {name: grafana-datasources}
+        - name: dashboard-providers
+          configMap: {name: grafana-dashboard-providers}
+        - name: dashboards
+          configMap: {name: grafana-dashboard-slo}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: observability
+spec:
+  type: NodePort
+  selector: {app: grafana}
+  ports: [{port: 3000, targetPort: 3000, nodePort: 30300}]

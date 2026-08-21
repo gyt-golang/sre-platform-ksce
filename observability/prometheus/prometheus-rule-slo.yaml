@@ -1,0 +1,155 @@
+# SLO 错误预算引擎 —— PrometheusRule (Prometheus Operator CRD)
+# 实现 Google SRE《SRE 工作手册》第 5 章的多窗口多燃烧率告警（Multi-Window Multi-Burn-Rate）。
+#
+# SLO 定义（见 deploy/manifests/ordersvc-slo ConfigMap）：
+#   - 可用性 SLI: 成功率 >= 99.9%（30 天窗口），即错误预算 0.1% ≈ 43 分钟/月
+#   - 延迟 SLI:   P99 延迟 < 500ms（30 天窗口）
+#
+# 燃烧率（Burn Rate）= 实际错误率 / 允许错误率。
+# 允许错误率 = 1 - SLO = 0.001。
+# 多窗口策略：短窗口负责"快速发现"，长窗口负责"防抖降噪"，两者同时超阈值才告警。
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ordersvc-slo
+  namespace: sre-demo
+  labels:
+    app: ordersvc
+    prometheus: kube-prometheus
+spec:
+  groups:
+    # ============ 第一组：SLI 原子指标与比率计算（Recording Rules）============
+    # 把高频原始 counter 预聚合为各窗口的比率，避免告警查询时全量扫描原始序列。
+    - name: ordersvc.sli.recording
+      interval: 30s
+      rules:
+        # 请求总量速率（QPS），按 path 维度
+        - record: ordersvc:request_rate5m
+          expr: sum by (path) (rate(ordersvc_http_requests_total[5m]))
+        - record: ordersvc:request_rate30m
+          expr: sum by (path) (rate(ordersvc_http_requests_total[30m]))
+        - record: ordersvc:request_rate1h
+          expr: sum by (path) (rate(ordersvc_http_requests_total[1h]))
+        - record: ordersvc:request_rate6h
+          expr: sum by (path) (rate(ordersvc_http_requests_total[6h]))
+        - record: ordersvc:request_rate1d
+          expr: sum by (path) (rate(ordersvc_http_requests_total[1d]))
+
+        # 错误请求速率（5xx 视为失败，计入可用性 SLI 分母对侧）
+        - record: ordersvc:error_rate5m
+          expr: sum by (path) (rate(ordersvc_http_requests_total{code=~"5.."}[5m]))
+        - record: ordersvc:error_rate30m
+          expr: sum by (path) (rate(ordersvc_http_requests_total{code=~"5.."}[30m]))
+        - record: ordersvc:error_rate1h
+          expr: sum by (path) (rate(ordersvc_http_requests_total{code=~"5.."}[1h]))
+        - record: ordersvc:error_rate6h
+          expr: sum by (path) (rate(ordersvc_http_requests_total{code=~"5.."}[6h]))
+        - record: ordersvc:error_rate1d
+          expr: sum by (path) (rate(ordersvc_http_requests_total{code=~"5.."}[1d]))
+
+        # 错误比率（error_rate / request_rate），即该窗口的实际错误率
+        - record: ordersvc:error_ratio5m
+          expr: ordersvc:error_rate5m / ordersvc:request_rate5m
+        - record: ordersvc:error_ratio30m
+          expr: ordersvc:error_rate30m / ordersvc:request_rate30m
+        - record: ordersvc:error_ratio1h
+          expr: ordersvc:error_rate1h / ordersvc:request_rate1h
+        - record: ordersvc:error_ratio6h
+          expr: ordersvc:error_rate6h / ordersvc:request_rate6h
+        - record: ordersvc:error_ratio1d
+          expr: ordersvc:error_rate1d / ordersvc:request_rate1d
+
+        # 燃烧率 = 实际错误率 / 允许错误率(0.001)。
+        # 燃烧率=1 表示按预算匀速消耗；=14.4 表示 1 小时耗尽 2% 月预算（需立即介入）。
+        - record: ordersvc:burn_rate5m
+          expr: ordersvc:error_ratio5m / 0.001
+        - record: ordersvc:burn_rate30m
+          expr: ordersvc:error_ratio30m / 0.001
+        - record: ordersvc:burn_rate1h
+          expr: ordersvc:error_ratio1h / 0.001
+        - record: ordersvc:burn_rate6h
+          expr: ordersvc:error_ratio6h / 0.001
+        - record: ordersvc:burn_rate1d
+          expr: ordersvc:error_ratio1d / 0.001
+
+        # 延迟 SLI：P99（histogram_quantile）
+        - record: ordersvc:latency_p99_5m
+          expr: |
+            histogram_quantile(0.99,
+              sum by (path, le) (rate(ordersvc_http_request_duration_seconds_bucket[5m])))
+        - record: ordersvc:latency_p99_30m
+          expr: |
+            histogram_quantile(0.99,
+              sum by (path, le) (rate(ordersvc_http_request_duration_seconds_bucket[30m])))
+
+    # ============ 第二组：多窗口多燃烧率告警（Alerting Rules）============
+    # 经典 3 档告警：页面（Page）/工单（Ticket）/长尾预算预警。
+    - name: ordersvc.slo.alerts
+      interval: 30s
+      rules:
+        # 页面告警（Page）：5m & 1h 双窗口，燃烧率 > 14.4。
+        # 含义：1 小时内已消耗 2% 月预算 → 立即介入，对应"真实业务受损"。
+        - alert: OrdersvcHighErrorRatePage
+          expr: |
+            ordersvc:burn_rate5m > 14.4
+            and ordersvc:burn_rate1h > 14.4
+          for: 2m
+          labels:
+            severity: page
+            slo: availability-99.9
+            team: sre
+          annotations:
+            summary: "ordersvc 可用性急剧恶化，错误预算高速燃烧"
+            description: "5m 与 1h 窗口燃烧率均超 14.4，1 小时内已消耗 ≥2% 月错误预算。当前 5m 错误率 {{ $value | humanizePercentage }}。"
+            runbook: "docs/runbook/ordersvc-high-error-rate.md"
+
+        # 工单告警（Ticket）：30m & 6h 双窗口，燃烧率 > 6。
+        # 含义：6 小时内消耗 ~5% 月预算 → 持续劣化但未到页面级，建工单跟踪。
+        - alert: OrdersvcHighErrorRateTicket
+          expr: |
+            ordersvc:burn_rate30m > 6
+            and ordersvc:burn_rate6h > 6
+          for: 15m
+          labels:
+            severity: ticket
+            slo: availability-99.9
+            team: sre
+          annotations:
+            summary: "ordersvc 错误率持续偏高，预算稳步消耗"
+            description: "30m 与 6h 窗口燃烧率均超 6，6 小时内消耗约 5% 月错误预算。"
+
+        # 预算预警（Budget）：2h & 1d 双窗口（此处用 1d 单窗口近似），燃烧率 > 1。
+        # 含义：按当前速率将在 30 天内耗尽预算 → 提前预警，无需立即介入。
+        - alert: OrdersvcErrorBudgetAtRisk
+          expr: ordersvc:burn_rate1d > 1
+          for: 30m
+          labels:
+            severity: info
+            slo: availability-99.9
+            team: sre
+          annotations:
+            summary: "ordersvc 错误预算按当前速率将在窗口期内耗尽"
+            description: "1d 窗口燃烧率 > 1，按当前速率 30 天窗口的错误预算将被耗尽，建议排期优化。"
+
+        # 延迟 SLO 告警：P99 > 500ms 持续 5 分钟。
+        - alert: OrdersvcHighLatencyP99
+          expr: ordersvc:latency_p99_5m > 0.5
+          for: 5m
+          labels:
+            severity: ticket
+            slo: latency-p99-500ms
+            team: sre
+          annotations:
+            summary: "ordersvc P99 延迟超过 500ms SLO 阈值"
+            description: "5m 窗口 P99 = {{ $value | humanizeDuration }}，已突破延迟 SLO。"
+
+        # 混沌演练专用：故障注入强度可视化告警（非真实故障，仅演练标记）。
+        - alert: OrdersvcChaosInjected
+          expr: ordersvc_failure_rate_injected > 0
+          for: 1m
+          labels:
+            severity: info
+            chaos: "true"
+          annotations:
+            summary: "ordersvc 正在注入故障（混沌演练中）"
+            description: "当前注入失败率 {{ $value }}，延迟 {{ $labels.__name__ }}。该告警用于演练可观测性验证。"

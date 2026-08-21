@@ -1,0 +1,23 @@
+# kind 集群配置：单控制面节点，映射可观测性 UI 与业务端口到宿主机。
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+containerdConfigPatches:
+  # 优化 kind 节点 containerd 镜像拉取，对接内部镜像加速（按需替换）。
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
+      endpoint = ["https://registry-1.docker.io"]
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # 业务入口：宿主 8080 -> 节点 30080 (ordersvc NodePort)
+      - containerPort: 30080
+        hostPort: 8080
+      # Prometheus UI
+      - containerPort: 30090
+        hostPort: 9090
+      # Grafana UI
+      - containerPort: 30300
+        hostPort: 3000
+      # Jaeger UI
+      - containerPort: 30686
+        hostPort: 16686

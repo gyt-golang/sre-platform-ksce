@@ -1,0 +1,136 @@
+# 可观测性 —— Logs 支柱：Loki + Promtail
+# Promtail 以 DaemonSet 采集每个节点容器日志（含 ordersvc 结构化 JSON 日志），
+# 打上 namespace/pod/container 标签后发送至 Loki，Grafana 可按 Label 过滤检索。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: observability
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: loki}}
+  template:
+    metadata: {labels: {app: loki}}
+    spec:
+      containers:
+        - name: loki
+          image: grafana/loki:3.2.0
+          args: ["-config.file=/etc/loki/loki.yml"]
+          ports: [{containerPort: 3100, name: http}]
+          volumeMounts:
+            - {name: config, mountPath: /etc/loki}
+            - {name: data, mountPath: /loki}
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 1Gi}
+      volumes:
+        - name: config
+          configMap: {name: loki-config}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: observability
+data:
+  loki.yml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+    common:
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        kvstore: {store: inmemory}
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index: {prefix: index_, period: 24h}
+    limits_config:
+      # 单租户简化配置，适配 demo 与中小规模日志量。
+      retention_period: 168h
+      max_query_series: 1000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: observability
+spec:
+  selector: {app: loki}
+  ports: [{port: 3100, targetPort: http}]
+---
+# Promtail DaemonSet：采集 /var/log/pods/*.log，自动注入 K8s 元数据标签。
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: promtail
+  namespace: observability
+spec:
+  selector: {matchLabels: {app: promtail}}
+  template:
+    metadata: {labels: {app: promtail}}
+    spec:
+      containers:
+        - name: promtail
+          image: grafana/promtail:3.2.0
+          args: ["-config.file=/etc/promtail/promtail.yml"]
+          env:
+            - {name: HOSTNAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}
+          volumeMounts:
+            - {name: config, mountPath: /etc/promtail}
+            - {name: logs, mountPath: /var/log}
+            - {name: pos, mountPath: /run/promtail}
+          resources:
+            requests: {cpu: 30m, memory: 64Mi}
+            limits: {cpu: 200m, memory: 256Mi}
+      volumes:
+        - name: config
+          configMap: {name: promtail-config}
+        - name: logs
+          hostPath: {path: /var/log}
+        - name: pos
+          hostPath: {path: /run/promtail}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promtail-config
+  namespace: observability
+data:
+  promtail.yml: |
+    server:
+      http_listen_port: 9080
+    positions:
+      filename: /run/promtail/positions.yaml
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+    scrape_configs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+        pipeline_stages:
+          # 解析 ordersvc 输出的结构化日志，提取 level 字段便于按日志级别过滤。
+          - json:
+              expressions:
+                level: level
+                msg: msg
+          - labels:
+              level:

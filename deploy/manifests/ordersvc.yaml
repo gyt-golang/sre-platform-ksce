@@ -1,0 +1,175 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sre-demo
+  labels:
+    name: sre-demo
+---
+# ServiceAccount：非默认 SA，便于后续接入 NetworkPolicy 与 RBAC 最小权限。
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ordersvc
+  namespace: sre-demo
+---
+# ConfigMap：把 SLO 目标（可用性、延迟预算）以配置形式声明，体现「SLO as Code」。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ordersvc-slo
+  namespace: sre-demo
+data:
+  # 30 天窗口 SLO：可用性 99.9% => 月错误预算约 43 分钟。
+  availability_slo: "0.999"
+  # 延迟 SLO：P99 < 500ms。
+  latency_p99_slo_ms: "500"
+  slo_window: "30d"
+  error_budget_30d_minutes: "43"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ordersvc
+  namespace: sre-demo
+  labels:
+    app: ordersvc
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ordersvc
+  strategy:
+    # 滚动更新：激进但安全——maxUnavailable=0 保证任意时刻不摘 Pod 数超过 0，
+    # 配合 readiness 探针实现零宕机发布（SRE 变更管理核心实践）。
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: ordersvc
+      annotations:
+        # 启用 Prometheus 采集注解（兼容无 ServiceMonitor 的部署方式）。
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: ordersvc
+      # 镜像拉取凭证：从金山云 KECR 私有仓库拉取 ordersvc 镜像。
+      imagePullSecrets:
+        - name: regcred
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: ordersvc
+          image: hub.kce.ksyun.com/czmtest/gyt_test/ordersvc:v1
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          # 资源 requests/limits：HPA 基于 CPU requests 做扩缩容决策。
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: "ordersvc"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4318"
+            # 初始无故障，混沌演练时通过 /admin/fault 或 Chaos Mesh 注入。
+            - name: FAILURE_RATE
+              value: "0"
+            - name: LATENCY_MS
+              value: "0"
+          # 存活探针：失败自动重启，实现进程级自愈。
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          # 就绪探针：失败摘除流量，实现「故障时自动隔离」。
+          # 与 handler.readyz 联动——注入失败率 >0.9 时标记 NotReady。
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 2
+          # 启动探针：慢启动服务保护，避免启动期被 liveness 误杀。
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            failureThreshold: 12
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ordersvc
+  namespace: sre-demo
+  labels:
+    app: ordersvc
+spec:
+  type: NodePort
+  selector:
+    app: ordersvc
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30088
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+---
+# HPA：基于 CPU 利用率与在途订单数双向扩缩，应对突发流量——容量弹性能力。
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ordersvc
+  namespace: sre-demo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ordersvc
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+    - type: Pods
+      pods:
+        metric:
+          name: ordersvc_orders_in_flight
+        target:
+          type: AverageValue
+          averageValue: "10"
+  behavior:
+    # 扩容激进、缩容保守：防止流量抖动导致 Pod 反复抖动（thrashing）。
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60

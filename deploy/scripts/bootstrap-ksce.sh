@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# 基于金山云平台的 SRE 可靠性工程平台 —— 一键部署脚本（金山云 KEC 真实多节点集群版）
+#
+# 目标集群：金山云 KEC 5 节点（3 master + 2 node）K8s v1.31 / Calico / containerd
+# 云产品：  KECR（镜像仓库）+ KS3（Loki 对象存储，可选）
+# 前置：
+#   1. export KSCE_PWD=<master root 密码> KECR_PWD=<KECR 登录密码>
+#   2. deploy/scripts/kubeconf-ksce.conf 已就绪（公网化 kubeconfig）
+#   3. 安全组放行 30088/30090/30300/30686
+# 用法：bash deploy/scripts/bootstrap-ksce.sh
+set -euo pipefail
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$PROJECT_ROOT"
+
+# 金山云集群与 KECR 配置
+MASTER01=10.0.0.182
+KCONFIG="deploy/scripts/kubeconf-ksce.conf"
+KECR=hub.kce.ksyun.com
+KECR_REPO=czmtest/gyt_test
+KECR_USER="${KECR_USER:-<KECR登录用户名>}"
+IMG="${KECR}/${KECR_REPO}/ordersvc:v1"
+export KUBECONFIG="$KCONFIG"
+export PYTHONIOENCODING=utf-8
+
+log(){ echo -e "\033[1;34m[ksce]\033[0m $*"; }
+err(){ echo -e "\033[1;31m[error]\033[0m $*" >&2; }
+
+# 0. 前置检查
+command -v kubectl >/dev/null || { err "缺少 kubectl"; exit 1; }
+command -v python  >/dev/null || { err "缺少 python+paramiko"; exit 1; }
+[ -n "${KSCE_PWD:-}" ] || { err "请先 export KSCE_PWD=<master root 密码>"; exit 1; }
+[ -n "${KECR_PWD:-}" ] || { err "请先 export KECR_PWD=<KECR 登录密码>"; exit 1; }
+kubectl get nodes >/dev/null 2>&1 || { err "kubeconfig 不可用，请检查 $KCONFIG"; exit 1; }
+log "集群连通 ✓  $(kubectl get nodes -o name | wc -l) 节点"
+
+# 1. 5 节点 containerd 镜像加速（docker.io + ghcr.io，Chaos Mesh 镜像在 ghcr.io）
+log "配置 5 节点 containerd 镜像加速（docker.io + ghcr.io）..."
+python deploy/scripts/apply-mirrors.py
+python deploy/scripts/apply-ghcr-mirror.py
+
+# 2. KECR：构建并推送 ordersvc 镜像（在 master01 远程执行 docker build/push）
+log "上传源码 → master01 构建 → 推送 KECR..."
+MSYS_NO_PATHCONV=1 python deploy/scripts/ksce-remote.py upload app /root/sre-app
+MSYS_NO_PATHCONV=1 python deploy/scripts/ksce-remote.py exec \
+  "cd /root/sre-app && docker build -t ${IMG} --build-arg VERSION=ksce-v1 . && \
+   echo '${KECR_PWD}' | docker login ${KECR} -u ${KECR_USER} --password-stdin && \
+   docker push ${IMG}"
+
+# 3. imagePullSecret（KECR 私有仓库凭证，注入到业务命名空间）
+log "创建 imagePullSecret regcred..."
+kubectl create secret docker-registry regcred --namespace=sre-demo \
+  --docker-server="${KECR}" --docker-username="${KECR_USER}" --docker-password="${KECR_PWD}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# 4. 业务服务 ordersvc（Go 微服务 + 三类探针自愈 + HPA 弹性 + SLO ConfigMap）
+log "部署 ordersvc（镜像 ${IMG}）..."
+kubectl apply -f deploy/manifests/ordersvc.yaml
+kubectl -n sre-demo rollout status deployment/ordersvc --timeout=300s || true
+
+# 5. 可观测性三支柱（镜像走节点加速器拉取）
+log "部署可观测性栈（Prometheus / Grafana / Loki+Promtail / Jaeger+OTel）..."
+kubectl apply -f observability/prometheus/prometheus.yaml
+kubectl apply -f observability/grafana/grafana.yaml
+kubectl apply -f observability/loki/loki.yaml
+kubectl apply -f observability/jaeger/jaeger.yaml
+# PrometheusRule CRD（需 Prometheus Operator，裸 Prometheus 用 ConfigMap 版规则，容错跳过）
+kubectl apply -f observability/prometheus/prometheus-rule-slo.yaml 2>/dev/null || true
+
+# 6. Chaos Mesh（helm，runtime=containerd，镜像在 ghcr.io 走加速；加速慢时可手动搬运镜像）
+log "部署 Chaos Mesh..."
+MSYS_NO_PATHCONV=1 python deploy/scripts/ksce-remote.py exec \
+  "helm repo add chaos-mesh https://charts.chaos-mesh.org 2>/dev/null || true; helm repo update >/dev/null 2>&1; \
+   helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh -n chaos-mesh --create-namespace \
+   --set chaosDaemon.runtime=containerd --set chaosDaemon.socketPath=/run/containerd/containerd.sock \
+   --set controllerManager.replicaCount=1 --version 2.7.0"
+log "部署混沌实验（PodChaos/NetworkChaos/StressChaos）..."
+kubectl apply -f chaos/experiments.yaml
+
+# 7. 等待核心组件就绪
+log "等待 Pod 就绪（最长 6 分钟）..."
+kubectl -n observability rollout status deployment/prometheus --timeout=360s || true
+kubectl -n observability rollout status deployment/grafana   --timeout=360s || true
+kubectl -n chaos-mesh      rollout status deployment/chaos-controller-manager --timeout=360s || true
+
+cat <<EOF
+
+\033[1;32m✓ 部署完成 —— 基于金山云平台的 SRE 可靠性工程平台\033[0m
+
+金山云 KEC 公网访问地址（安全组已放行 NodePort）：
+  ordersvc API :  http://${MASTER01}:30088/healthz
+  Prometheus   :  http://${MASTER01}:30090    （/rules 查 SLO 规则，/alerts 查燃烧率告警）
+  Grafana      :  http://${MASTER01}:30300    （SRE/SLO 大盘，admin/admin）
+  Jaeger UI    :  http://${MASTER01}:30686    （查 ordersvc 端到端链路）
+
+验证 SLO 告警链路：
+  SRE_HOST=${MASTER01} bash deploy/scripts/load-test.sh 20 600          # 打流量
+  SRE_HOST=${MASTER01} bash deploy/scripts/chaos-inject-fault.sh 0.5 100  # 注入 50% 故障观察燃烧率告警
+
+备注：
+  - chaos-daemon 镜像在 ghcr.io，若节点拉取缓慢，可跑 deploy/scripts/transport-image-v2.py 从已拉到镜像的节点内网搬运。
+  - KS3 对象存储集成见 observability/loki/loki.yaml（Loki chunks 落 KS3，存储分离）。
+EOF

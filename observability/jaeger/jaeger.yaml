@@ -1,0 +1,118 @@
+# 可观测性 —— Traces 支柱：OpenTelemetry Collector + Jaeger
+# ordersvc 通过 OTLP/HTTP 把 span 上报到 otel-collector(4318)，
+# Collector 转发至 Jaeger(4317 OTLP gRPC)，Grafana/Jaeger UI 可查端到端链路。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: observability
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: jaeger}}
+  template:
+    metadata: {labels: {app: jaeger}}
+    spec:
+      containers:
+        - name: jaeger
+          # all-in-one：开发/演示用，含 collector + query + UI + in-memory 存储。
+          # 生产应替换为 Jaeger + Elasticsearch/Cassandra 后端 + HotROD 示例。
+          image: jaegertracing/all-in-one:1.60
+          env:
+            - {name: COLLECTOR_OTLP_ENABLED, value: "true"}
+            - {name: SPAN_STORAGE_TYPE, value: "memory"}
+          ports:
+            - {name: otlp-grpc, containerPort: 4317}
+            - {name: otlp-http, containerPort: 4318}
+            - {name: ui, containerPort: 16686}
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: observability
+spec:
+  type: NodePort
+  selector: {app: jaeger}
+  ports:
+    - {name: otlp-grpc, port: 4317, targetPort: otlp-grpc}
+    - {name: otlp-http, port: 4318, targetPort: otlp-http}
+    - {name: ui, port: 16686, targetPort: ui, nodePort: 30686}
+---
+# otel-collector：接收 ordersvc OTLP，转发 Jaeger。
+# 解耦应用与后端：换存储后端只改 Collector 配置，不动业务代码。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc: {endpoint: 0.0.0.0:4317}
+          http: {endpoint: 0.0.0.0:4318}
+    processors:
+      batch:
+        timeout: 5s
+        send_batch_size: 512
+      # 采样限流：防止突发 trace 压垮后端，体现可观测性成本治理。
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+    exporters:
+      otlp/jaeger:
+        endpoint: jaeger:4317
+        tls:
+          insecure: true
+      debug:
+        verbosity: basic
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp/jaeger]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: observability
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: otel-collector}}
+  template:
+    metadata: {labels: {app: otel-collector}}
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.109.0
+          args: ["--config=/etc/otelcol/config.yaml"]
+          ports:
+            - {name: otlp-grpc, containerPort: 4317}
+            - {name: otlp-http, containerPort: 4318}
+          volumeMounts:
+            - {name: config, mountPath: /etc/otelcol}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+      volumes:
+        - name: config
+          configMap: {name: otel-collector-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: observability
+spec:
+  selector: {app: otel-collector}
+  ports:
+    - {name: otlp-grpc, port: 4317, targetPort: otlp-grpc}
+    - {name: otlp-http, port: 4318, targetPort: otlp-http}

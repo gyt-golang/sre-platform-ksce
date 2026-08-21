@@ -1,0 +1,9 @@
+# 凭证文件（含集群管理员证书/密码），绝不入库
+deploy/scripts/kubeconf-ksce.conf
+deploy/scripts/kubeconf-raw.conf
+deploy/scripts/probe*.py
+*.log
+
+# 本地生成物
+deploy/scripts/dash.json
+__pycache__/

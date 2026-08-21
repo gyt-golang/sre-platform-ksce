@@ -74,3 +74,6 @@ spec:
 # 注意：此实验不用 Chaos Mesh，而是用 Service 调用 ordersvc 的 /admin/fault 接口
 # 直接热更新应用故障率，验证错误预算燃烧速率告警（OrdersvcHighErrorRatePage）。
 # 见 scripts/chaos-inject-fault.sh
+#
+# 进化功能：稳态校验见 steady-state.yaml —— Chaos Mesh 实验 + Argo AnalysisRun
+# 自动校验 SLO 稳态假设（burn_rate5m ≤ 1），实验击穿 SLO 自动标记失败。

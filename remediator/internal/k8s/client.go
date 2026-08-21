@@ -10,9 +10,11 @@ import (
 	"os/exec"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Client 封装 clientset 与 namespace。
@@ -64,4 +66,51 @@ func (c *Client) RolloutUndo(name string) (string, error) {
 		return "", fmt.Errorf("rollout undo %s: %w: %s", name, err, string(out))
 	}
 	return fmt.Sprintf("aborted rollout/%s, 回退到 stable", name), nil
+}
+
+// WritePostmortemDraft 阶段四：把 LLM 生成的 postmortem 草稿落成 ConfigMap，
+// 供 deploy/scripts/validate-postmortem.py 校验（草稿按 template.md 结构）。
+// namespace 用 sre-demo（postmortem 校验脚本扫该 ns 的 ConfigMap 或本地文件）。
+func (c *Client) WritePostmortemDraft(eventID, draft string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmName := "postmortem-auto-" + eventID
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cmName,
+			Namespace: c.namespace,
+			Labels:    map[string]string{"type": "postmortem", "auto-generated": "true"},
+		},
+		Data: map[string]string{"postmortem.md": draft},
+	}
+	existing, err := c.clientset.CoreV1().ConfigMaps(c.namespace).Get(ctx, cmName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		_, err = c.clientset.CoreV1().ConfigMaps(c.namespace).Create(ctx, cm, metav1.CreateOptions{})
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	existing.Data = cm.Data
+	_, err = c.clientset.CoreV1().ConfigMaps(c.namespace).Update(ctx, existing, metav1.UpdateOptions{})
+	return err
+}
+
+// PauseRollout 阶段四进化功能：错误预算策略自动化，给 Argo Rollout 打 spec.pause 冻结/解冻发布。
+// pause=true 冻结（预算耗尽不许发），pause=false 解冻（预算恢复）。
+func (c *Client) PauseRollout(name string, pause bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	pauseStr := "false"
+	if pause {
+		pauseStr = "true"
+	}
+	cmd := exec.CommandContext(ctx, "kubectl", "-n", c.namespace,
+		"patch", "rollout", name, "--type=merge",
+		"-p", `{"spec":{"pause":`+pauseStr+`}}`)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("patch rollout pause %s=%s: %w: %s", name, pauseStr, err, string(out))
+	}
+	return nil
 }

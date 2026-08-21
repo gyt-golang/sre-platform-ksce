@@ -1,0 +1,70 @@
+# 混沌稳态校验（进化功能）—— Chaos Mesh 实验 + Argo AnalysisRun 自动校验 SLO 稳态假设。
+#
+# 传统混沌实验靠人肉看大盘判断"有没有击穿 SLO"，进化：用 AnalysisRun 在实验期间持续查
+# burn_rate5m，超阈值自动标记实验失败，体现"稳态假设驱动混沌"——实验前声明期望的稳态，
+# 实验中自动校验，不达标即告警/回滚。
+#
+# 用法：
+#   1. apply 本文件启动 PodKill 实验 + 关联 AnalysisRun
+#   2. 实验期间 AnalysisRun 每 30s 查 ordersvc:burn_rate5m
+#   3. burn_rate5m > 1（按当前速率消耗超预算）→ AnalysisRun Failed → 标记稳态假设不成立
+#   4. burn_rate5m <= 1 持续到实验结束 → Successful → 稳态假设成立（Pod Kill 不击穿 SLO）
+#
+# 前置：Argo Rollouts 已装（提供 AnalysisRun CRD）、Prometheus rules 已加载（burn_rate5m）。
+---
+# 稳态校验模板：PodKill 期间 burn_rate5m 不得超 1（故障注入期可放宽，此处校验真实 PodKill 不击穿 SLO）。
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: steady-state-podkill
+  namespace: sre-demo
+spec:
+  metrics:
+    - name: burn-rate-steady
+      # 稳态假设：PodKill 实验期间，5m 燃烧率不应超 1（即错误率不超 SLO 允许的 0.1%）
+      successCondition: len(result) > 0 && result[0] <= 1.0
+      failureLimit: 2    # 连续 2 次超阈值即判定稳态假设不成立
+      provider:
+        prometheus:
+          address: http://prometheus.observability.svc.cluster.local:9090
+          query: |
+            (sum(rate(ordersvc_http_requests_total{path="/order",code=~"5.."}[5m]))
+            / sum(rate(ordersvc_http_requests_total{path="/order"}[5m]))) / 0.001 or vector(0)
+---
+# 实验：PodKill + 关联 AnalysisRun 稳态校验。
+# Chaos Mesh 实验 duration 60s，AnalysisRun 期间每 30s 校验一次（共约 2 次）。
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: podkill-steady-test
+  namespace: sre-demo
+  labels:
+    chaos: "true"
+    steady-state: "true"
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces: [sre-demo]
+    labelSelectors:
+      app: ordersvc
+  duration: "60s"
+---
+# AnalysisRun：关联稳态校验，独立 apply（与 PodChaos 同时启动）。
+# 注意：AnalysisRun 不直接 owner-ref Chaos 实验，需人工/脚本同时 apply 并在实验窗口内校验。
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisRun
+metadata:
+  name: steady-state-podkill-run
+  namespace: sre-demo
+spec:
+  metrics:
+    - name: burn-rate-steady
+      successCondition: len(result) > 0 && result[0] <= 1.0
+      failureLimit: 2
+      provider:
+        prometheus:
+          address: http://prometheus.observability.svc.cluster.local:9090
+          query: |
+            (sum(rate(ordersvc_http_requests_total{path="/order",code=~"5.."}[5m]))
+            / sum(rate(ordersvc_http_requests_total{path="/order"}[5m]))) / 0.001 or vector(0)

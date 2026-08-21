@@ -94,7 +94,8 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 // processEvent 异步处理事件：查日志 → LLM 根因推断 → 规则引擎修复 → 持久化。
 func (h *Handler) processEvent(event *triage.Event) {
 	if event.Status == "resolved" {
-		// 阶段四：resolved 后生成 RCA 草稿（进化功能，后续阶段实现）。
+		// 阶段四进化功能：事件 resolved 后，喂 LLM 生成 postmortem 草稿，落 ConfigMap 供 validate 校验。
+		h.generatePostmortem(event)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -128,6 +129,24 @@ func (h *Handler) processEvent(event *triage.Event) {
 func (h *Handler) handleEvents(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(h.store.List())
+}
+
+// generatePostmortem 阶段四：事件 resolved 后调 LLM 生成 postmortem 草稿，落 ConfigMap。
+// 草稿按 postmortem/template.md 结构，可被 validate-postmortem.py 校验。体现"自动闭环运营"。
+func (h *Handler) generatePostmortem(event *triage.Event) {
+	if h.llmClient == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	draft, err := h.llmClient.GenerateRCA(ctx, event, event.Remediations)
+	if err != nil {
+		return
+	}
+	// 落 ConfigMap（key = auto-<eventID>.md），供 validate-postmortem.py 校验。
+	if h.k8sClient != nil {
+		_ = h.k8sClient.WritePostmortemDraft(event.ID, draft)
+	}
 }
 
 // kubeExecutor 实现 remediate.ActionExecutor，调用 k8s client + ordersvc /admin/fault。

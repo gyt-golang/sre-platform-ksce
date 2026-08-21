@@ -10,12 +10,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/sre-demo/remediator/internal/handler"
 	"github.com/sre-demo/remediator/internal/k8s"
 	"github.com/sre-demo/remediator/internal/llm"
 	"github.com/sre-demo/remediator/internal/loki"
 	"github.com/sre-demo/remediator/internal/prom"
+	"github.com/sre-demo/remediator/internal/remediate"
 )
 
 var buildVersion = "dev"
@@ -40,6 +42,12 @@ func main() {
 	}
 
 	h := handler.New(service, deployName, pc, lc, llmC, kc, dryRun)
+
+	// 阶段四进化功能：错误预算策略自动化——预算耗尽自动冻结 Rollout 发布。
+	if kc != nil && getenv("ENABLE_BUDGET_POLICY", "true") == "true" {
+		bp := remediate.NewBudgetPolicy(pc, service, deployName, kc, 60*time.Second)
+		go bp.Start()
+	}
 
 	// 8080：webhook/events/healthz；9090：metrics（与 ordersvc 双端口规范一致）。
 	appMux := http.NewServeMux()

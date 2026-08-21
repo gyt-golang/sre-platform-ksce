@@ -111,6 +111,8 @@ MSYS_NO_PATHCONV=1 python deploy/scripts/ksce-remote.py exec \
    --set controllerManager.replicaCount=1 --version 2.7.0"
 log "部署混沌实验（PodChaos/NetworkChaos/StressChaos）..."
 kubectl apply -f chaos/experiments.yaml
+# 稳态校验模板（进化功能：Chaos Mesh 实验 + AnalysisRun 自动校验 SLO 稳态假设）
+kubectl apply -f chaos/steady-state.yaml 2>/dev/null || true   # 需 Argo Rollouts AnalysisRun CRD
 
 # 6.5 remediator：告警智能分诊+自动修复（Alertmanager webhook → 规则引擎自愈 + LLM 根因推断）
 # 构建 remediator 镜像（含 kubectl，rollout undo 用），apply RBAC + Deployment + Service。
